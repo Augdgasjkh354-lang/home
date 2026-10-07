@@ -14,7 +14,10 @@
  *   G.poker.state() -> G.state.poker（存档模块，见下）
  *   G.poker.openStudy()                                    电脑学习：课程、计时、小测验
  *   G.poker.update(dt)                                     每帧：推进学习计时，并调用 G.cardroom.tick(dt)
+ *   G.poker.equityAll(holes, board, samples, rnd) -> [胜率…]  多人同时胜率（全知之眼用，holes 为各座位底牌或 null）
+ *   G.poker.pickReads(h, n, rnd) -> [座位下标…]            随机挑 n 个对手用于读牌（rnd 应为独立随机源）
  * 存档字段 G.state.poker：scammed / scam / stats / learned / studyDay / study / table（table 由 cardroom.js 维护）
+ *   另有 intelDay / intel / intelLog（情报贩子，由 cardroom.js 维护）
  * ============================================================ */
 (function () {
   'use strict';
@@ -481,6 +484,55 @@
     return samples > 0 ? total / samples : 0;
   };
 
+  // 多人同时胜率（牌技 Lv10「全知之眼」用）：holes[i] 为座位 i 的两张底牌，null 表示不参与；
+  // 每次模拟补齐公共牌后比大小，平局分摊。返回与 holes 等长的数组（不参与者为 0）。
+  poker.equityAll = function (holes, board, samples, rnd) {
+    rnd = rnd || Math.random;
+    var known = board.slice(), idx = [], i, k;
+    for (i = 0; i < holes.length; i++) {
+      if (holes[i] && holes[i].length === 2) { idx.push(i); known.push(holes[i][0], holes[i][1]); }
+    }
+    var out = holes.map(function () { return 0; });
+    if (!idx.length) return out;
+    var pool = poker.newDeck().filter(function (c) {
+      return !known.some(function (x) { return x.r === c.r && x.s === c.s; });
+    });
+    var need = 5 - board.length, tot = idx.map(function () { return 0; });
+    for (var it = 0; it < samples; it++) {
+      for (k = 0; k < need; k++) {
+        var j = k + Math.floor(rnd() * (pool.length - k));
+        var tmp = pool[k]; pool[k] = pool[j]; pool[j] = tmp;
+      }
+      var b = board.concat(pool.slice(0, need)), best = -1, sc = [], cnt = 0;
+      for (k = 0; k < idx.length; k++) {
+        sc[k] = poker.score7(holes[idx[k]].concat(b));
+        if (sc[k] > best) best = sc[k];
+      }
+      for (k = 0; k < idx.length; k++) if (sc[k] === best) cnt++;
+      for (k = 0; k < idx.length; k++) if (sc[k] === best) tot[k] += 1 / cnt;
+    }
+    for (k = 0; k < idx.length; k++) out[idx[k]] = samples > 0 ? tot[k] / samples : 0;
+    return out;
+  };
+
+  // 读牌：从对手（座位 1 起）里随机挑 n 个已发到底牌的座位，返回升序下标。
+  // rnd 应传独立随机源，不要用发牌用的 Math.random，保证读牌不改变发牌随机性。
+  poker.pickReads = function (h, n, rnd) {
+    rnd = rnd || Math.random;
+    var cand = [], i, k;
+    for (i = 1; i < h.seats.length; i++) {
+      if (h.seats[i].hole && h.seats[i].hole.length === 2) cand.push(i);
+    }
+    n = Math.max(0, Math.min(Math.floor(Number(n) || 0), cand.length));
+    var out = [];
+    for (k = 0; k < n; k++) {
+      var j = k + Math.floor(rnd() * (cand.length - k));
+      var t = cand[k]; cand[k] = cand[j]; cand[j] = t;
+      out.push(cand[k]);
+    }
+    return out.sort(function (a, b) { return a - b; });
+  };
+
   // 起手牌评级：Chen 公式的简化版
   function chen(hole) {
     var a = hole[0], b = hole[1];
@@ -593,6 +645,9 @@
       studyDay: { day: 0, n: 0 },                      // 当天已学习次数
       study: null,                                     // 学习进行中：{id, t, total, phase, ...}
       table: null,                                     // 牌桌（cardroom.js）
+      intelDay: { day: 0, n: 0 },                      // 情报贩子：当天已买次数（cardroom.js）
+      intel: null,                                     // 当天买到的那条情报 {day, text, src, rel}
+      intelLog: [],                                    // 最近的情报记录（最多 8 条）
     };
   };
 
