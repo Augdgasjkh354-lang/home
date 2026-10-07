@@ -211,9 +211,10 @@ G.SKILLS = [
     effect: function (lv) { return 1 + 0.02 * lv; },
     text: function (lv) { return '读牌判断 +' + (lv * 2) + '%'; },
     unlocks: [
-      { lv: 2, text: '德州扑克：牌力提示' },
-      { lv: 5, text: '德州扑克：底池赔率提示' },
-      { lv: 8, text: '德州扑克：对手习惯提示' },
+      { lv: 2, text: '德州扑克：牌桌显示当前牌型' },
+      { lv: 4, text: '德州扑克：显示起手牌强度评级' },
+      { lv: 6, text: '德州扑克：显示底池赔率与所需胜率' },
+      { lv: 8, text: '德州扑克：显示胜率估算' },
     ],
   },
   {
