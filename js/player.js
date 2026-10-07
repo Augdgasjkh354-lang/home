@@ -52,11 +52,11 @@
     return !!(G.state && G.state.work);
   }
 
-  // 外景障碍：自家/汉堡店建筑占格、装饰树、林小满站的格子（白天营业时）
+  // 外景障碍：自家/汉堡店/牌场建筑占格、装饰树、林小满站的格子（白天营业时）
   function streetSolid(gx, gy) {
     const S = G.STREET;
     if (G.npc && G.npc.blocks && G.npc.blocks(gx, gy)) return true;
-    const rects = [S.home, S.shop];
+    const rects = [S.home, S.shop, S.cardroom];
     for (let i = 0; i < rects.length; i++) {
       const r = rects[i];
       if (gx >= r.x && gx < r.x + r.w && gy >= r.y && gy < r.y + r.h) return true;

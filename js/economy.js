@@ -78,10 +78,21 @@
     G.state.money += (n || 0);
   };
 
+  // 技能系数（技能模块未加载时为 1，即无加成）
+  function skillBonus(id) {
+    return G.skills && G.skills.bonus ? G.skills.bonus(id) : 1;
+  }
+
   // 使用家具后的结算：需求变化、花费、收入
   economy.applyUse = function (furn, use) {
     if (!G.state || !use) return;
     var fx = use.effect || {};
+    var isPC = !!(furn && furn.id === 'desk_pc');
+
+    // 电脑工作：体能降低精力消耗；手艺提高收入
+    if (isPC && fx.energy < 0) {
+      fx = Object.assign({}, fx, { energy: Math.round(fx.energy * skillBonus('stamina')) });
+    }
 
     G.NEEDS.forEach(function (k) {
       if (fx[k]) addNeed(k, fx[k]);
@@ -90,9 +101,9 @@
     if (use.cost) economy.spend(use.cost);
 
     if (fx.money) {
-      if (furn && furn.id === 'desk_pc') {
+      if (isPC) {
         var income = Math.round(
-          fx.money * (1 + G.state.roomLevel * 0.25) * (1 + economy.auraBonus() * 0.02)
+          fx.money * (1 + G.state.roomLevel * 0.25) * (1 + economy.auraBonus() * 0.02) * skillBonus('craft')
         );
         economy.earn(income);
         G.log('工作完成，赚到 ' + income + ' 元');
@@ -100,6 +111,11 @@
         economy.earn(fx.money);
         G.log('到账 ' + fx.money + ' 元');
       }
+    }
+
+    if (isPC && G.skills && G.skills.addXp && G.SKILL_XP) {
+      G.skills.addXp('stamina', G.SKILL_XP.work);
+      G.skills.addXp('craft', G.SKILL_XP.work);
     }
   };
 
@@ -467,6 +483,20 @@
   function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
   function pickNum(v, def) { return typeof v === 'number' && isFinite(v) ? v : def; }
 
+  // 深度补默认值：src 缺字段或类型不对时用 def；src 里多出的未知字段保留（新版本存档不丢数据）
+  function fillDefaults(src, def) {
+    if (Array.isArray(def)) return Array.isArray(src) ? src : def.slice();
+    if (!isObj(def)) {
+      var ok = typeof src === typeof def && (typeof def !== 'number' || isFinite(src));
+      return ok ? src : def;
+    }
+    var s = isObj(src) ? src : {};
+    var out = {};
+    Object.keys(s).forEach(function (k) { out[k] = s[k]; });
+    Object.keys(def).forEach(function (k) { out[k] = fillDefaults(s[k], def[k]); });
+    return out;
+  }
+
   // 把存档数据和默认状态合并，缺字段用默认值补齐
   function mergeState(d) {
     var base = G.newState();
@@ -528,6 +558,11 @@
 
     // 林小满等 NPC 的状态（补齐缺失字段）
     out.npcs = G.npc && G.npc.fill ? G.npc.fill(d.npcs, out.day) : base.npcs;
+
+    // 已注册模块（G.registerModule）的字段：旧档缺字段时按 defaults 补齐
+    (G.modules || []).forEach(function (m) {
+      out[m.id] = fillDefaults(d[m.id], m.defaults());
+    });
 
     return out;
   }

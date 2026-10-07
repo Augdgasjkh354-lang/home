@@ -2,8 +2,15 @@
  * 像素小家 Pixel Home —— 共享契约（所有模块必须遵守）
  * 全局命名空间：window.G
  * 每个模块文件只做一件事：往 G 上挂自己的对象，不得修改别人的文件。
- * 脚本加载顺序：config → render → player → pet → economy → street → npc-data → npc → burger → ui → main
+ * 脚本加载顺序：config → render → player → pet → economy → street → npc-data → npc → burger → skills → ui → main
  * 画面：俯视角，Canvas 2D，纯代码绘制像素图（不使用任何外部图片）
+ *
+ * 【模块注册】新模块想要存档字段，不必改 economy.js：
+ *   G.registerModule({ id:'stocks', defaults: function(){ return {...}; } })
+ *   之后 G.state[id] 由 newState 生成；读档时 economy 的 mergeState 按 defaults 深度补齐缺失字段（旧档兼容）。
+ *   若模块对象 G[id] 上有 update(dt)，main.js 每帧（未暂停时）调用它。
+ * 【电脑菜单】G.pcMenu = [ {id,label,desc?,when?(ctx)->bool,onClick(ctx)} ]，点电脑桌时渲染；
+ *   ctx = { uid } 为电脑桌的家具 uid。其他模块可 G.pcMenu.push(...) 追加。
  * ============================================================ */
 window.G = window.G || {};
 
@@ -75,20 +82,33 @@ G.NEED_DECAY = { energy:0.25, hunger:0.30, mood:0.12, hygiene:0.18 }; // 每真�
  * 格坐标同室内（左上角 (0,0)）。建筑、树占格不可走；人行道、马路、草地可走。
  * 行划分：0 草地 | 1~3 建筑 | 4 人行道 | 5~7 马路 | 8 人行道 | 9 草地
  * home：自家小屋（点它回室内）；door 在建筑底排，门口一格 (door.gx, door.gy+1) 可走。
- * shop：汉堡店占位（预留空地，本步只画外观；点击只提示「还在装修」）；sign 为招牌左上格。
+ * shop：汉堡店（点门走到店门前开面板，见 burger.js）；sign 为招牌左上格。
+ * cardroom：牌场（右侧，夜里霓虹亮灯）；点门走到门前，由 G.cardroom.enter() 接管（内容在 cardroom.js，未实现时提示「牌场还没开张」）。
  * spawn：从室内出门后玩家出现的格（自家门口）。
  * trees：不可走的装饰树（单格）。
  */
 G.STREET = {
-  w: 16, h: 10,
+  w: 20, h: 10,
   home: { x: 2,  y: 1, w: 4, h: 3, door: { gx: 3,  gy: 3 } },
   shop: { x: 10, y: 1, w: 4, h: 3, door: { gx: 11, gy: 3 }, sign: { gx: 10, gy: 1 } },
+  cardroom: { x: 16, y: 1, w: 4, h: 3, door: { gx: 17, gy: 3 }, sign: { gx: 16, gy: 1 } },
   spawn: { gx: 3, gy: 4 },
   trees: [
     { gx: 0,  gy: 0 }, { gx: 6,  gy: 0 }, { gx: 15, gy: 0 },
     { gx: 0,  gy: 2 }, { gx: 8,  gy: 2 }, { gx: 15, gy: 2 },
     { gx: 5,  gy: 9 }, { gx: 12, gy: 9 },
   ],
+};
+
+/* ---------- 牌场（外景店门 G.STREET.cardroom.door，见 street.js） ----------
+ * 营业：open 到 close 之间，close 可以超过 24 表示次日（14:00 ~ 次日 06:00）。
+ * 内容（德州扑克等）由后续模块 js/cardroom.js 提供：G.cardroom.enter()。 */
+G.CARDROOM = { open: 14, close: 30 };
+G.isCardroomOpen = function (t) {
+  var C = G.CARDROOM;
+  t = ((Number(t) || 0) % 24 + 24) % 24;
+  if (C.close > 24) return t >= C.open || t < C.close - 24;
+  return t >= C.open && t < C.close;
 };
 
 /* ---------- 汉堡店「林记汉堡」（外景店门 G.STREET.shop.door，见 burger.js） ----------
@@ -144,6 +164,99 @@ G.NPCS = {
   },
 };
 
+/* ---------- 技能（见 js/skills.js） ----------
+ * 每项：id、name、icon、desc、maxLv(=10)、need(lv) 从 lv 升到 lv+1 所需经验、
+ *       effect(lv) 当前等级的效果系数（永远是乘数，1 为无加成），text(lv) 效果说明（lv>0 时用）、
+ *       unlocks 解锁列表 [{lv, text}]。
+ * 效果系数的用法：
+ *   stamina  打工/电脑工作的精力消耗 × effect      （burger.js / economy.js）
+ *   charm    林小满聊天的正面好感收益 × effect；extraOpt 为 Lv5 多出的选项（npc.js）
+ *   invest   炒股手续费 × effect                     （由 js/stocks.js 读取，未实现前仅占位）
+ *   poker    牌局读牌/判断 × effect                  （由 js/poker.js 读取，未实现前仅占位）
+ *   craft    打工与电脑工作的收入 × effect            （burger.js / economy.js）
+ *   street   被骗概率与损失 × effect                  （街头骗局事件未实现前仅占位）
+ * 经验来源：打工一班 / 电脑工作完成 → 体能、手艺各 G.SKILL_XP.work；聊天一次 → 口才 G.SKILL_XP.chat。 */
+G.SKILL_XP = { work: 10, chat: 8 };
+G.xpNeed = function (lv) { return 20 + lv * 15; };   // 升级经验公式：Lv0→1 需 20，之后每级 +15
+G.SKILLS = [
+  {
+    id: 'stamina', name: '体能', icon: '💪', maxLv: 10, need: G.xpNeed,
+    desc: '跑腿、扛盘子练出来的耐力。打工和电脑工作更不容易累。',
+    effect: function (lv) { return 1 - 0.03 * lv; },
+    text: function (lv) { return '精力消耗 -' + (lv * 3) + '%'; },
+    unlocks: [],
+  },
+  {
+    id: 'charm', name: '口才', icon: '💬', maxLv: 10, need: G.xpNeed,
+    desc: '会说话，知道什么时候接话、什么时候闭嘴。',
+    effect: function (lv) { return 1 + 0.04 * lv; },
+    text: function (lv) { return '聊天好感收益 +' + (lv * 4) + '%'; },
+    extraOpt: { lv: 5, t: '顺口夸她一句手艺好', r: '行吧，算你有眼光。', d: 3 },
+    unlocks: [{ lv: 5, text: '林小满聊天多一个选项「顺口夸她一句手艺好」' }],
+  },
+  {
+    id: 'invest', name: '投资', icon: '📈', maxLv: 10, need: G.xpNeed,
+    desc: '看得懂 K 线，也知道什么时候该收手。',
+    effect: function (lv) { return 1 - 0.04 * lv; },
+    text: function (lv) { return '炒股手续费 -' + (lv * 4) + '%'; },
+    unlocks: [
+      { lv: 3, text: '炒股面板显示近期走势' },
+      { lv: 6, text: '炒股面板显示「小道消息」（可信度一般）' },
+    ],
+  },
+  {
+    id: 'poker', name: '牌技', icon: '🃏', maxLv: 10, need: G.xpNeed,
+    desc: '在牌桌上看人、算牌，输赢之外也学会了不动声色。',
+    effect: function (lv) { return 1 + 0.02 * lv; },
+    text: function (lv) { return '读牌判断 +' + (lv * 2) + '%'; },
+    unlocks: [
+      { lv: 2, text: '德州扑克：牌力提示' },
+      { lv: 5, text: '德州扑克：底池赔率提示' },
+      { lv: 8, text: '德州扑克：对手习惯提示' },
+    ],
+  },
+  {
+    id: 'craft', name: '手艺', icon: '🔧', maxLv: 10, need: G.xpNeed,
+    desc: '翻肉饼、修电脑、接单子，手上的活越做越利索。',
+    effect: function (lv) { return 1 + 0.03 * lv; },
+    text: function (lv) { return '打工/电脑收入 +' + (lv * 3) + '%'; },
+    unlocks: [],
+  },
+  {
+    id: 'street', name: '街头智慧', icon: '🧭', maxLv: 10, need: G.xpNeed,
+    desc: '这座城市的暗面见得多了，一眼就能看出谁在演戏、谁在下套。',
+    effect: function (lv) { return 1 - 0.04 * lv; },
+    text: function (lv) { return '被骗概率与损失 -' + (lv * 4) + '%'; },
+    unlocks: [{ lv: 4, text: '能一眼识破街头骗局（骗局事件由后续模块提供）' }],
+  },
+];
+
+/* ---------- 电脑菜单（点电脑桌时弹出，见 ui.js） ----------
+ * 其他模块可 G.pcMenu.push({id, label, desc?, when?(ctx), onClick(ctx)}) 追加菜单项。
+ * ctx = { uid }：电脑桌家具的 uid。onClick 执行前面板会先关闭。 */
+G.pcMenu = [
+  {
+    id: 'work', label: '接单工作', desc: '走到电脑前干活，耗时约 10 秒，消耗精力与饱腹',
+    onClick: function (ctx) {
+      if (G.player && G.player.useFurniture) G.player.useFurniture(ctx.uid);
+    },
+  },
+  {
+    id: 'stocks', label: '炒股', desc: '看看行情，买卖几只股票',
+    onClick: function () {
+      if (G.stocks && G.stocks.openPanel) G.stocks.openPanel();
+      else G.log('股市模块还没装好');
+    },
+  },
+  {
+    id: 'poker', label: '学习德州扑克', desc: '在电脑上研究牌局与牌型',
+    onClick: function () {
+      if (G.poker && G.poker.openStudy) G.poker.openStudy();
+      else G.log('德州扑克模块还没装好');
+    },
+  },
+];
+
 // 室内门：开在底墙（格外一行），x 取房间宽的一半；门口一格是室内可走格
 G.homeDoor = function (room) { return { gx: Math.floor(room.w / 2), gy: room.h }; };
 G.homeDoorFront = function (room) { var d = G.homeDoor(room); return { gx: d.gx, gy: d.gy - 1 }; };
@@ -171,6 +284,8 @@ G.homeDoorFront = function (room) { var d = G.homeDoor(room); return { gx: d.gx,
  *   work: null | { t, total }, // 正在打工：t 已过秒数，total 总秒数；非空时玩家不能移动/使用
  *   npcs: { lin: { affinity, lastSeenDay, lastTalkDay, talksToday, giftDay, giftToday, checkDay,
  *                  flags: { story, events, sketch }, pending } },   // 林小满，字段见 npc.js
+ *   skills: { [id]: { xp, lv } },   // 技能（js/skills.js 通过 G.registerModule 注册）
+ *   // 其他已注册模块的字段同样挂在这里（G.registerModule 的 id）
  * }
  * 坐标约定：格坐标 (gx,gy) 对应室内左上角为(0,0)。
  * 像素坐标 = 格坐标*G.TILE。render 画室内时整体加上 (G.view.ox, G.view.oy) 偏移（外圈墙厚度1格）。
@@ -256,8 +371,18 @@ G.footprint = function (f) { // 家具实际占格宽高（考虑旋转）
   return f.rot ? { w: d.h, h: d.w } : { w: d.w, h: d.h };
 };
 
+/* ---------- 模块注册（存档字段） ----------
+ * G.registerModule({ id, defaults() })：id 即 G.state 的键，defaults 返回该模块的默认状态。
+ * 新档由 newState 生成；读档由 economy.js 的 mergeState 深度补齐。模块 id 不要与已有字段重名。 */
+G.modules = G.modules || [];
+G.registerModule = function (m) {
+  if (!m || typeof m.id !== 'string' || !m.id) return;
+  for (var i = 0; i < G.modules.length; i++) if (G.modules[i].id === m.id) return;
+  G.modules.push({ id: m.id, defaults: typeof m.defaults === 'function' ? m.defaults : function () { return {}; } });
+};
+
 G.newState = function () {
-  return {
+  var s = {
     money: 300, day: 1, time: 8.0, season: 0, weather: 'sunny', roomLevel: 0,
     furniture: G.STARTER_FURNITURE.map(f => ({ uid: G.uid(), id: f.id, x: f.x, y: f.y, rot: 0 })),
     needs: { energy: 80, hunger: 70, mood: 70, hygiene: 80 },
@@ -275,4 +400,6 @@ G.newState = function () {
       },
     },
   };
+  G.modules.forEach(function (m) { s[m.id] = m.defaults(); });   // 已注册模块的存档字段
+  return s;
 };

@@ -45,6 +45,11 @@
         if (G.petAI) G.petAI.update(dt);
         if (G.burger && G.burger.update) G.burger.update(dt);
         if (G.npc && G.npc.update) G.npc.update(dt);
+        // 已通过 G.registerModule 注册的模块：G[id].update(dt) 存在则调用
+        (G.modules || []).forEach(function (m) {
+          var mod = G[m.id];
+          if (mod && mod.update) mod.update(dt);
+        });
       }
       if (G.ui) G.ui.update(dt);
       if (G.render) G.render.draw(dt);

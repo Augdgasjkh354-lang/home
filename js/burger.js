@@ -93,11 +93,19 @@
     var s = G.state;
     var sh = shiftCfg();
     s.work = null;
-    G.economy.applyUse(null, { effect: sh.cost || {} });
+    // 体能降低精力消耗；手艺提高工资（技能模块未加载时系数为 1）
+    var cost = Object.assign({}, sh.cost || {});
+    if (cost.energy && G.skills && G.skills.bonus) cost.energy = Math.round(cost.energy * G.skills.bonus('stamina'));
+    G.economy.applyUse(null, { effect: cost });
     var mult = G.npc && G.npc.shiftMultiplier ? G.npc.shiftMultiplier() : 1;
-    var pay = Math.round((sh.pay || 0) * mult);
+    var craft = G.skills && G.skills.bonus ? G.skills.bonus('craft') : 1;
+    var pay = Math.round((sh.pay || 0) * mult * craft);
     G.economy.earn(pay);
     G.log('打工结束，到账 ' + pay + ' 元' + (mult > 1 ? '（林小满加成 +10%）' : ''));
+    if (G.skills && G.skills.addXp && G.SKILL_XP) {
+      G.skills.addXp('stamina', G.SKILL_XP.work);
+      G.skills.addXp('craft', G.SKILL_XP.work);
+    }
   }
 
   burger.update = function (dt) {

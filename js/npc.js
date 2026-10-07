@@ -222,6 +222,21 @@
     rebuild();
   }
 
+  // 口才：只放大正面的好感收益（系数见 config.js 的 G.SKILLS）
+  function charmGain(d) {
+    if (d > 0 && G.skills && G.skills.bonus) return Math.round(d * G.skills.bonus('charm'));
+    return d;
+  }
+
+  // 口才达到 extraOpt.lv 级时，聊天多出的一个选项（没有则 null）
+  function charmExtra() {
+    var list = G.SKILLS || [];
+    var c = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === 'charm') c = list[i];
+    if (!c || !c.extraOpt || !G.skills || !G.skills.level) return null;
+    return G.skills.level('charm') >= c.extraOpt.lv ? c.extraOpt : null;
+  }
+
   function chooseOpt(opt) {
     var n = lin();
     if (!n || !topic || !opt) return;
@@ -230,8 +245,10 @@
     if (n.lastTalkDay !== t) { n.lastTalkDay = t; n.talksToday = 0; }
     n.talksToday += 1;
     n.lastSeenDay = t;
-    addAffinity(opt.d);
-    G.log('和林小满聊了聊，好感 ' + signed(opt.d));
+    var d = charmGain(opt.d);
+    addAffinity(d);
+    G.log('和林小满聊了聊，好感 ' + signed(d));
+    if (G.skills && G.skills.addXp && G.SKILL_XP) G.skills.addXp('charm', G.SKILL_XP.chat);
     enterView('home');
     lastLine = opt.r;
     rebuild();
@@ -336,6 +353,8 @@
     topic.opts.forEach(function (opt) {
       body.appendChild(bigBtn(opt.t, function () { chooseOpt(opt); }));
     });
+    var extra = charmExtra();
+    if (extra) body.appendChild(bigBtn(extra.t, function () { chooseOpt(extra); }));
     body.appendChild(bigBtn('算了，不聊了', cancelChat, 'ghost'));
   }
 

@@ -226,9 +226,13 @@
     left.appendChild(row2);
 
     var right = el('div', 'hud-right');
+    els.skillBtn = btn('技能', 'hud-btn', function () {
+      if (G.skills && G.skills.openPanel) G.skills.openPanel();
+    });
     els.shopBtn = btn('商店 B', 'hud-btn', toggleShop);
     els.pauseBtn = btn('暂停', 'hud-btn', togglePause);
     els.resetBtn = btn('重置存档', 'hud-btn', onResetClick);
+    right.appendChild(els.skillBtn);
     right.appendChild(els.shopBtn);
     right.appendChild(els.pauseBtn);
     right.appendChild(els.resetBtn);
@@ -689,6 +693,38 @@
   // 内容有变化时（如点了按钮）整体重建面板内容
   ui.rebuildPanel = function () { if (custom) paintCustom(); };
 
+  /* ---------------- 电脑菜单（点电脑桌） ---------------- */
+  // 菜单项来自 G.pcMenu（config.js），其他模块可追加；ctx = {uid} 为电脑桌的家具 uid
+  function openPcMenu(uid) {
+    var s = G.state;
+    if (!s) return;
+    if (s.flags && s.flags.blackout > 0) {
+      G.log('停电了，电脑用不了');
+      return;
+    }
+    var ctx = { uid: uid };
+    ui.openPanel({
+      title: '电脑',
+      build: function (body) {
+        var shown = 0;
+        (G.pcMenu || []).forEach(function (item) {
+          if (!item || typeof item.onClick !== 'function') return;
+          if (typeof item.when === 'function' && !item.when(ctx)) return;
+          shown += 1;
+          var box = el('div', 'sec');
+          if (item.desc) box.appendChild(el('div', 'shop-sub', item.desc));
+          box.appendChild(btn(item.label, 'bigbtn', function () {
+            ui.closeShop();                 // 先关菜单，再执行（onClick 可能会打开别的面板）
+            item.onClick(ctx);
+          }));
+          body.appendChild(box);
+        });
+        if (!shown) body.appendChild(el('div', 'sec', '电脑暂时没有可用的功能。'));
+        body.appendChild(btn('关闭', 'bigbtn ghost', function () { ui.closeShop(); }));
+      },
+    });
+  }
+
   /* ---------------- 建造 / 移动 ---------------- */
   // 本地合法性校验：越界、wallItem 必须 y==0、与任何已有家具重叠（含 walkable）均不允许
   function canPlace(id, gx, gy, rot) {
@@ -848,6 +884,7 @@
 
     var f = !outside && G.player && G.player.furnitureAt ? G.player.furnitureAt(t.gx, t.gy) : null;
     if (f) {
+      if (f.id === 'desk_pc') { openPcMenu(f.uid); return; }   // 电脑：先弹菜单，「接单工作」再走过去干活
       var d = G.FURNITURE[f.id];
       if (d && d.use) {
         if (G.player.useFurniture) G.player.useFurniture(f.uid);

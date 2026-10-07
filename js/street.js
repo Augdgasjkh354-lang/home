@@ -9,6 +9,7 @@
  *       室内：点底墙上的门 → 走到门口再出门
  *       外景：点林小满 → 走到她身边聊天（npc.js）；点自家小屋 → 走到门口再回家；
  *             点汉堡店 → 走到店门前开店面板（burger.js）
+ *             点牌场 → 营业时间内走到门前，调用 G.cardroom.enter()（未实现则提示「牌场还没开张」）
  * ============================================================ */
 (function () {
   'use strict';
@@ -87,8 +88,27 @@
       else G.log('汉堡店还在装修');
       return true;
     }
+    if (inRect(S.cardroom, gx, gy)) {
+      cardroomDoor();
+      return true;
+    }
     return false;
   };
+
+  // 牌场门：营业时间外只提示；营业时走到门前，再交给 G.cardroom.enter()（内容见 cardroom.js）
+  function cardroomDoor() {
+    if (!isCardroomOpenNow()) { G.log('牌场还没开门（14:00 开门，次日 06:00 打烊）'); return; }
+    var door = G.STREET.cardroom.door;
+    walkThen({ gx: door.gx, gy: door.gy + 1 }, function () {
+      if (!isCardroomOpenNow()) { G.log('牌场还没开门（14:00 开门，次日 06:00 打烊）'); return; }
+      if (G.cardroom && G.cardroom.enter) G.cardroom.enter();
+      else G.log('牌场还没开张');
+    });
+  }
+
+  function isCardroomOpenNow() {
+    return !!(G.isCardroomOpen && G.state && G.isCardroomOpen(G.state.time));
+  }
 
   G.street = street;
 })();

@@ -464,6 +464,37 @@
     g.restore();
   }
 
+  // 牌场：墨绿屋顶、暗紫墙、屋顶中央的霓虹「牌」字招牌，门口一盏红灯（城市暗面）
+  var CR_ROOF = '#1e3d33', CR_WALL = '#2d2140', CR_TRIM = '#4a2f63', CR_NEON = '#ff5ad6';
+  function drawCardroom(g, r) {
+    var fw = r.w * TILE, fh = r.h * TILE, dx = (r.door.gx - r.x) * TILE;
+    g.save();
+    g.translate(r.x * TILE, r.y * TILE);
+    B(g, 0, 0, fw, 16, CR_ROOF);                         // 屋顶
+    for (var i = 0; i < fw; i += 8) R(g, i + 4, 0, 1, 8, dk(CR_ROOF));
+    R(g, 0, 14, fw, 2, '#0f1f19');                       // 屋檐
+    B(g, 0, 16, fw, fh - 16, CR_WALL);                   // 墙
+    for (var x = 3; x < fw - 2; x += 6) R(g, x, 18, 1, fh - 20, dk(CR_WALL));
+    B(g, 18, 1, 28, 13, '#140a1c', CR_NEON);             // 霓虹招牌
+    g.font = 'bold 12px sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = '#ffe6f8';
+    g.fillText('牌', fw / 2, 8);
+    [[5, 22], [fw - 15, 22]].forEach(function (p) {     // 暗色小窗，窗内一点冷光
+      B(g, p[0], p[1], 10, 8, '#0c0814', CR_TRIM);
+      R(g, p[0] + 2, p[1] + 2, 3, 2, '#7fe0b8');
+    });
+    B(g, dx + 2, fh - 14, 12, 14, CR_TRIM);              // 门
+    R(g, dx + 4, fh - 12, 8, 6, '#0c0814');
+    R(g, dx + 4, fh - 5, 8, 3, CR_WALL);
+    R(g, dx + 6, fh - 19, 4, 3, '#ff3b3b');              // 门口红灯
+    R(g, 0, fh - 1, fw, 1, OUT);
+    R(g, 0, 16, 1, fh - 16, OUT);
+    R(g, fw - 1, 16, 1, fh - 16, OUT);
+    g.restore();
+  }
+
   function buildStreetStatic(season, snow) {
     var S = G.STREET, W = S.w * TILE, H = S.h * TILE;
     var cv = mk(W, H);
@@ -488,6 +519,7 @@
     for (var dx = 2; dx < W; dx += 16) R(g, dx, 6 * TILE + 7, 9, 2, ROAD_DASH);
     drawHouse(g, S.home);
     drawShop(g, S.shop);
+    if (S.cardroom) drawCardroom(g, S.cardroom);
     for (var k = 0; k < S.trees.length; k++) drawTree(g, S.trees[k].gx, S.trees[k].gy);
     return cv;
   }
@@ -514,6 +546,11 @@
     g.save();
     g.globalCompositeOperation = 'lighter';
     for (var i = 0; i < pts.length; i++) glow(g, pts[i][0], pts[i][1], 26, '255,200,120', 0.45 * n);
+    if (S.cardroom) {                                   // 牌场：粉色霓虹招牌 + 门口红灯
+      var C = S.cardroom;
+      glow(g, C.x * T + 32, C.y * T + 8, 22, '255,90,214', 0.55 * n);
+      glow(g, C.door.gx * T + 8, C.y * T + 30, 12, '255,59,59', 0.6 * n);
+    }
     g.restore();
   }
 
