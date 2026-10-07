@@ -27,6 +27,10 @@
 | `js/npc.js` | 林小满（`G.npc`）：好感（存于 `G.state.npcs.lin`）、聊天/送礼/故事/事件、每日好感衰减、街上站位 |
 | `js/burger.js` | 汉堡店（`G.burger`）：营业时间、买汉堡（经 `G.economy.applyUse`）、打工一班（`G.state.work` 忙碌状态）、班次上限；打工接入体能/手艺 |
 | `js/skills.js` | 技能（`G.skills`）：经验与升级、效果系数、技能面板；注册为存档模块 `skills` |
+| `js/stocks-data.js` | 8 只股票（`G.STOCKS`）与城市事件模板（`G.STOCK_EVENTS`） |
+| `js/stocks.js` | 炒股（`G.stocks`）：按游戏小时推进价格（均值回归+行业趋势+事件冲击）、新闻、买卖、分红、面板；`openPanel/priceOf/holding/portfolioValue/buy/sell/feeRate`；存档模块 `stocks` |
+| `js/poker.js` | 德扑引擎（`G.poker`，纯逻辑可 node 测试）、3 种 AI、电脑学德扑 `openStudy`；存档模块 `poker` |
+| `js/cardroom.js` | 牌场（`G.cardroom.enter()`）：首次老千剧情（扣 20% 现金）、三张牌桌、私局陷阱、打烊结算；牌技/街头智慧在此生效 |
 | `js/ui.js` | HUD（含「技能」按钮）、商店、电脑菜单（点电脑桌，渲染 `G.pcMenu`）、建造模式、输入处理；`ui.openPanel({title, build, tick})` / `ui.rebuildPanel()` 是其他模块打开面板的通用接口 |
 | `js/main.js` | 启动、事件绑定、主循环 |
 
@@ -53,7 +57,8 @@
 - 直接推 `main` 即可（个人项目），较大改动先开分支。
 
 ## 路线图
-1. 院子 + 种菜（按季节生长，可做饭/卖钱）← 下一步
+0. 已完成：技能、炒股、牌场与德扑
+1. 改变城市：城市指数（治安/繁荣/民心等）与主线 ← 构思中（院子种菜已搁置）
 2. 门口出行：小镇场景（便利店、市场、公园；汉堡店已有）
 3. 天气/季节对户外真正生效
 4. 宠物散步、更多邻居 NPC（林小满已完成，汉堡店打工已完成）
