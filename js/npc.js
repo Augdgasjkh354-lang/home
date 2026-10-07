@@ -1,17 +1,25 @@
 /* ============================================================
- * 像素小家 —— NPC 林小满（npc.js）
- * 只往 G.npc 上挂接口。人设在 config.js（G.NPCS.lin），文案在 npc-data.js。
- * 接口：
- *   G.npc.fill(savedNpcs, day) -> npcs     补齐存档字段（economy 读档时调用）
- *   G.npc.visible() -> bool                外景 + 营业时间内她在街上
- *   G.npc.spot() -> {gx,gy}                她站的格子
- *   G.npc.blocks(gx,gy) -> bool            该格是否被她占用（玩家寻路用）
- *   G.npc.handleClick(gx,gy) -> bool       点到她：走到身边后打开对话面板
- *   G.npc.open()                           直接打开对话面板
- *   G.npc.affinity() / stage() / hasPending()
- *   G.npc.shiftMultiplier() -> number      好感够高时打工工资加成
- *   G.npc.update(dt)                       每天检查一次：久不见则好感慢慢降（不跨阶段）
- * 好感：0~100，阶段 陌生/认识/熟人/朋友/好友/特别的人。
+ * 像素小家 —— NPC 通用模块（npc.js）
+ * 只往 G.npc 上挂接口。三位 NPC：lin（林小满，汉堡店）、mayor（周慕白，市政厅议员）、tech（程念，星河科技）。
+ * 人设在 config.js（G.NPCS），文案在 npc-data.js / npc-data2.js（G.NPC_DATA[id]），状态在 G.state.npcs[id]。
+ * 接口（id 缺省为 'lin'，保持旧调用可用）：
+ *   G.npc.ids                                 ['lin','mayor','tech']
+ *   G.npc.fill(savedNpcs, day) -> npcs        补齐存档字段（economy 读档 / newState 调用）
+ *   G.npc.visible(id) -> bool                 外景 + 该 NPC 的营业时段内她/他在街上
+ *   G.npc.visibleIds() -> [id]                当前在街上的 NPC
+ *   G.npc.inHours(id) -> bool                 当前时间是否在该 NPC 的出现时段（不管是否在外景）
+ *   G.npc.spot(id) -> {gx,gy}                 站位格
+ *   G.npc.at(gx,gy) -> id | null              该格是否是某位在街上的 NPC 的站位
+ *   G.npc.blocks(gx,gy) -> bool               该格是否被 NPC 占用（玩家寻路用）
+ *   G.npc.handleClick(gx,gy) -> bool          点到 NPC：走到身边后打开对话面板
+ *   G.npc.open(id)                            打开该 NPC 的面板（周慕白的面板即「市政厅面板」，见 city.js）
+ *   G.npc.affinity(id) / stage(id) / hasPending(id)
+ *   G.npc.addAffinity(id, d)                  直接加减好感（其他模块用，如城市项目完成）
+ *   G.npc.shiftMultiplier() -> number         林小满好感够高时打工工资加成（burger.js 读取）
+ *   G.npc.update(dt)                          每帧：好感事件检查；每天检查一次久不见的衰减
+ * 口才（G.skills.bonus('charm')）：所有 NPC 的正面好感收益 ×；Lv5 多一个专属选项；
+ *   Lv7 起每天每位 NPC 多聊 1 次；Lv10 起好感事件奖励翻倍。
+ * 好感：0~100，阶段 陌生/认识/熟人/朋友/好友/特别的人（阶段文案在 G.NPC_DATA[id].stages）。
  * 面板通过 G.ui.openPanel / rebuildPanel 打开。
  * ============================================================ */
 (function () {
@@ -20,19 +28,34 @@
   var G = (window.G = window.G || {});
   var npc = (G.npc = G.npc || {});
 
-  var view = 'home';        // home | chat | gift | story
-  var topic = null;         // 当前聊天话题
-  var lastTopicId = '';
-  var lastLine = '';        // 她刚说的一句（操作后的回应）
-  var greet = '';           // 本次打开面板时的开场白
+  var IDS = ['lin', 'mayor', 'tech'];
+  var CHARM_OPT_LV = 5, CHARM_CHAT_LV = 7, CHARM_DOUBLE_LV = 10;
+  var GIFT_LABEL = { lin: '送她一个汉堡', mayor: '送他一份礼', tech: '送她点东西' };
+  var STORY_LABEL = { lin: '问问她的事', mayor: '问问他的事', tech: '问问她的事' };
 
-  function D() { return G.NPC_DATA || {}; }
-  function P() { return (G.NPCS && G.NPCS.lin) || {}; }
-  function L() {
-    return P().limits || { chatPerDay: 2, giftPerDay: 1, decayAfterDays: 3, shiftBonusAt: 60, shiftBonus: 0.1 };
-  }
-  function lin() { return (G.state && G.state.npcs && G.state.npcs.lin) || null; }
+  var cur = null;            // 当前面板：{id, view, topic, lastLine, greet}
+  var lastTopicId = '';
+  var lastSig = '';
+
+  /* ---------- 数据读取（全部判空） ---------- */
+  function D(id) { return (G.NPC_DATA && G.NPC_DATA[id]) || {}; }
+  function P(id) { return (G.NPCS && G.NPCS[id]) || {}; }
+  function LIM(id) { return P(id).limits || { chatPerDay: 2, giftPerDay: 1, decayAfterDays: 3 }; }
+  function rec(id) { return (G.state && G.state.npcs && G.state.npcs[id]) || null; }
   function today() { return G.state ? G.state.day : 1; }
+  function nowT() { return Number(G.state && G.state.time) || 0; }
+  function stages(id) { return D(id).stages || (D('lin').stages) || []; }
+  function line(id, k) {
+    var v = (D(id).lines || {})[k];
+    if (v) return v;
+    return (D('lin').lines || {})[k] || '';
+  }
+  function hours(id) {
+    if (P(id).hours) return P(id).hours;
+    var B = G.BURGER || { open: 8, close: 22 };
+    return { from: B.open, to: B.close };
+  }
+  function charmLv() { return G.skills && G.skills.level ? G.skills.level('charm') : 0; }
 
   function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
   function fmt(s, vars) {
@@ -40,32 +63,39 @@
   }
   function signed(n) { return (n > 0 ? '+' : '') + n; }
 
-  function stageIndex(a) {
-    var st = D().stages || [];
+  function stageIndex(id, a) {
+    var st = stages(id);
     var idx = 0;
     for (var i = 0; i < st.length; i++) if (a >= st[i].min) idx = i;
     return idx;
   }
-  function stageOf(a) {
-    var st = D().stages || [];
-    return st[stageIndex(a)] || { name: '', min: 0, greet: ['……'] };
-  }
-  function isOpenHour(t) {
-    var B = G.BURGER || { open: 8, close: 22 };
-    return t >= B.open && t < B.close;
+  function stageOf(id, a) {
+    var st = stages(id);
+    return st[stageIndex(id, a)] || { name: '', min: 0, greet: ['……'] };
   }
 
-  function talksLeft() {
-    var n = lin();
+  function chatLimit(id) { return LIM(id).chatPerDay + (charmLv() >= CHARM_CHAT_LV ? 1 : 0); }
+  function talksLeft(id) {
+    var n = rec(id);
     if (!n) return 0;
     var used = n.lastTalkDay === today() ? n.talksToday : 0;
-    return Math.max(0, L().chatPerDay - used);
+    return Math.max(0, chatLimit(id) - used);
   }
-  function giftsLeft() {
-    var n = lin();
+  function giftsLeft(id) {
+    var n = rec(id);
     if (!n) return 0;
     var used = n.giftDay === today() ? n.giftToday : 0;
-    return Math.max(0, L().giftPerDay - used);
+    return Math.max(0, LIM(id).giftPerDay - used);
+  }
+
+  // 送礼清单：林小满用汉堡店菜单（送礼不结算效果，保持原有行为）；其他人在 config.js 的 gifts
+  function giftItems(id) {
+    if (id === 'lin') {
+      return ((G.BURGER && G.BURGER.menu) || []).map(function (m) {
+        return { id: m.id, name: m.name, price: m.price, desc: m.desc, noEffect: true };
+      });
+    }
+    return P(id).gifts || [];
   }
 
   /* ---------- DOM 小工具（与 ui.js 的样式类保持一致） ---------- */
@@ -76,9 +106,10 @@
     return node;
   }
   function sec() { return el('div', 'sec'); }
-  function bigBtn(text, onClick, cls) {
+  function bigBtn(text, onClick, cls, disabled) {
     var b = el('button', 'bigbtn' + (cls ? ' ' + cls : ''), text);
     b.type = 'button';
+    if (disabled) b.disabled = true;
     b.addEventListener('click', function () { b.blur(); onClick(); });
     return b;
   }
@@ -94,113 +125,180 @@
     wrap.appendChild(el('span', 'num', String(Math.round(v))));
     return wrap;
   }
-  function say(text) {
-    return el('div', 'npc-say', text);
-  }
-  function rebuild() {
-    if (G.ui && G.ui.rebuildPanel) G.ui.rebuildPanel();
-  }
+  function say(text) { return el('div', 'npc-say', text); }
+  function rebuild() { if (G.ui && G.ui.rebuildPanel) G.ui.rebuildPanel(); }
 
   /* ---------- 状态补齐（读档） ---------- */
-  npc.fill = function (saved, todayNum) {
-    var t = typeof todayNum === 'number' ? todayNum : 1;
+  function fillOne(id, src, t, start) {
     var out = {
-      affinity: 10, lastSeenDay: t, lastTalkDay: 0, talksToday: 0,
-      giftDay: 0, giftToday: 0, checkDay: t,
+      affinity: start, lastSeenDay: t, lastTalkDay: 0, talksToday: 0,
+      giftDay: 0, giftToday: 0, checkDay: t, rumorDay: 0,
       flags: { story: 0, events: {}, sketch: false }, pending: [],
     };
-    var src = saved && typeof saved === 'object' && saved.lin && typeof saved.lin === 'object' ? saved.lin : null;
-    if (!src) return { lin: out };
+    if (!src) return out;
 
-    ['affinity', 'lastSeenDay', 'lastTalkDay', 'talksToday', 'giftDay', 'giftToday', 'checkDay'].forEach(function (k) {
+    ['affinity', 'lastSeenDay', 'lastTalkDay', 'talksToday', 'giftDay', 'giftToday', 'checkDay', 'rumorDay'].forEach(function (k) {
       if (typeof src[k] === 'number' && isFinite(src[k])) out[k] = src[k];
     });
     out.affinity = G.clamp(Math.round(out.affinity), 0, 100);
 
     var f = src.flags && typeof src.flags === 'object' ? src.flags : {};
     out.flags = {
-      story: G.clamp(Math.floor(typeof f.story === 'number' ? f.story : 0), 0, (D().stories || []).length),
+      story: G.clamp(Math.floor(typeof f.story === 'number' ? f.story : 0), 0, (D(id).stories || []).length),
       events: f.events && typeof f.events === 'object' ? f.events : {},
       sketch: !!f.sketch,
     };
     out.pending = Array.isArray(src.pending)
-      ? src.pending.filter(function (k) { return typeof k === 'string' && out.flags.events[k]; }).slice(0, 5)
+      ? src.pending.filter(function (k) { return typeof k === 'string' && out.flags.events[k]; }).slice(0, 8)
       : [];
-    return { lin: out };
+    return out;
+  }
+
+  npc.fill = function (saved, todayNum) {
+    var t = typeof todayNum === 'number' ? todayNum : 1;
+    var out = {};
+    IDS.forEach(function (id) {
+      var src = saved && typeof saved === 'object' && saved[id] && typeof saved[id] === 'object' ? saved[id] : null;
+      var start = typeof P(id).startAffinity === 'number' ? P(id).startAffinity : 10;
+      out[id] = fillOne(id, src, t, start);
+    });
+    return out;
   };
 
   /* ---------- 查询 ---------- */
-  npc.spot = function () {
-    var s = P().spot || { gx: 13, gy: 4 };
+  npc.ids = IDS.slice();
+
+  npc.inHours = function (id) {
+    var h = hours(id || 'lin');
+    var t = nowT();
+    return t >= h.from && t < h.to;
+  };
+  npc.visible = function (id) {
+    id = id || 'lin';
+    var s = G.state;
+    return !!(s && s.scene === 'street' && G.STREET && P(id).spot && npc.inHours(id));
+  };
+  npc.visibleIds = function () {
+    return IDS.filter(function (id) { return npc.visible(id); });
+  };
+  npc.spot = function (id) {
+    var s = P(id || 'lin').spot || { gx: 0, gy: 0 };
     return { gx: s.gx, gy: s.gy };
   };
-  npc.visible = function () {
-    var s = G.state;
-    return !!(s && s.scene === 'street' && G.STREET && isOpenHour(Number(s.time) || 0));
+  npc.at = function (gx, gy) {
+    for (var i = 0; i < IDS.length; i++) {
+      var id = IDS[i];
+      if (!npc.visible(id)) continue;
+      var sp = npc.spot(id);
+      if (sp.gx === gx && sp.gy === gy) return id;
+    }
+    return null;
   };
-  npc.blocks = function (gx, gy) {
-    if (!npc.visible()) return false;
-    var sp = npc.spot();
-    return gx === sp.gx && gy === sp.gy;
-  };
-  npc.affinity = function () { var n = lin(); return n ? n.affinity : 0; };
-  npc.stage = function () { return stageOf(npc.affinity()); };
-  npc.hasPending = function () { var n = lin(); return !!(n && n.pending && n.pending.length); };
+  npc.blocks = function (gx, gy) { return npc.at(gx, gy) !== null; };
+  npc.affinity = function (id) { var n = rec(id || 'lin'); return n ? n.affinity : 0; };
+  npc.stage = function (id) { id = id || 'lin'; return stageOf(id, npc.affinity(id)); };
+  npc.hasPending = function (id) { var n = rec(id || 'lin'); return !!(n && n.pending && n.pending.length); };
   npc.shiftMultiplier = function () {
-    var n = lin();
-    var l = L();
-    return n && n.affinity >= l.shiftBonusAt ? 1 + l.shiftBonus : 1;
+    var n = rec('lin');
+    var cfg = P('lin').limits || {};
+    return n && n.affinity >= cfg.shiftBonusAt ? 1 + (cfg.shiftBonus || 0) : 1;
   };
 
-  /* ---------- 好感与奖励 ---------- */
-  function giveReward(rw) {
-    if (!rw || !G.economy) return;
-    if (rw.money) G.economy.earn(rw.money);
-    var fx = {};
-    var any = false;
+  /* ---------- 好感与事件 ---------- */
+  function rewardText(rw, m) {
+    var parts = [];
+    if (rw.money) parts.push('到账 ' + rw.money * m + ' 元');
     (G.NEEDS || []).forEach(function (k) {
-      if (rw[k]) { fx[k] = rw[k]; any = true; }
+      if (rw[k]) parts.push((G.NEED_LABEL ? G.NEED_LABEL[k] : k) + ' +' + rw[k] * m);
     });
-    if (any && G.economy.applyUse) G.economy.applyUse(null, { effect: fx });
+    if (rw.xp) Object.keys(rw.xp).forEach(function (k) {
+      var d = (G.SKILLS || []).filter(function (x) { return x.id === k; })[0];
+      parts.push((d ? d.name : k) + '经验 +' + rw.xp[k] * m);
+    });
+    return parts.join('，');
   }
 
-  function addAffinity(d) {
-    var n = lin();
-    if (!n || !d) return;
-    var before = n.affinity;
-    n.affinity = G.clamp(Math.round(before + d), 0, 100);
-    var evs = D().events || {};
+  function giveReward(id, rw) {
+    if (!rw) return '';
+    var m = charmLv() >= CHARM_DOUBLE_LV ? 2 : 1;      // 口才 Lv10：事件奖励翻倍
+    if (rw.money && G.economy && G.economy.earn) G.economy.earn(rw.money * m);
+    var fx = {}, any = false;
+    (G.NEEDS || []).forEach(function (k) {
+      if (rw[k]) { fx[k] = rw[k] * m; any = true; }
+    });
+    if (any && G.economy && G.economy.applyUse) G.economy.applyUse(null, { effect: fx });
+    if (rw.xp && G.skills && G.skills.addXp) {
+      Object.keys(rw.xp).forEach(function (k) { G.skills.addXp(k, rw.xp[k] * m); });
+    }
+    return rewardText(rw, m);
+  }
+
+  // 好感跨过阈值（或开局已达到）的事件：只触发一次，写入 pending 待玩家在面板里确认
+  function checkEvents(id) {
+    var n = rec(id);
+    var evs = D(id).events || {};
+    if (!n) return;
     Object.keys(evs).forEach(function (k) {
       var thr = Number(k);
-      if (before < thr && n.affinity >= thr && !n.flags.events[k]) {
-        n.flags.events[k] = true;      // 一次性
-        n.pending.push(k);
-        giveReward(evs[k].reward);
-        G.log(evs[k].log || '和林小满的关系又近了一步');
-      }
+      if (n.affinity < thr || n.flags.events[k]) return;
+      n.flags.events[k] = true;
+      n.pending.push(k);
+      if (n.pending.length > 8) n.pending.shift();
+      var summary = giveReward(id, evs[k].reward);
+      G.log(P(id).name + '「' + evs[k].title + '」' + (summary ? '：' + summary : ''));
     });
   }
 
-  // 每天检查一次：超过 decayAfterDays 没去看她，每天 -1，最低降到当前阶段下限
-  npc.update = function () {
-    var s = G.state, n = lin();
-    if (!s || !n || n.checkDay === s.day) return;
-    n.checkDay = s.day;
-    var gap = s.day - (n.lastSeenDay || 0);
-    if (gap > L().decayAfterDays && n.affinity > stageOf(n.affinity).min) {
-      n.affinity = Math.max(stageOf(n.affinity).min, n.affinity - 1);
-    }
-  };
+  function addAffinity(id, d) {
+    var n = rec(id);
+    if (!n || !d) return;
+    n.affinity = G.clamp(Math.round(n.affinity + d), 0, 100);
+    checkEvents(id);
+  }
+  npc.addAffinity = function (id, d) { addAffinity(id || 'lin', d); };
 
-  /* ---------- 面板操作 ---------- */
-  function enterView(v) {
-    view = v;
-    lastLine = '';
-    if (v !== 'chat') topic = null;
+  // 口才：只放大正面的好感收益（系数见 config.js 的 G.SKILLS）
+  function charmGain(d) {
+    if (d > 0 && G.skills && G.skills.bonus) return Math.round(d * G.skills.bonus('charm'));
+    return d;
   }
 
-  function pickTopic() {
-    var list = D().topics || [];
+  // 口才 Lv5 的专属选项：林小满用 config 里的 extraOpt，其他人用 npc-data 的 charmOpt
+  function charmOpt(id) {
+    if (charmLv() < CHARM_OPT_LV) return null;
+    if (id === 'lin') {
+      var c = null;
+      (G.SKILLS || []).forEach(function (x) { if (x.id === 'charm') c = x; });
+      return c && c.extraOpt ? c.extraOpt : null;
+    }
+    return D(id).charmOpt || null;
+  }
+
+  npc.update = function () {
+    var s = G.state;
+    if (!s || !s.npcs) return;
+    IDS.forEach(function (id) {
+      var n = rec(id);
+      if (!n) return;
+      checkEvents(id);                                  // 开局已达阈值的事件（如周慕白 30）在这里触发
+      if (n.checkDay === s.day) return;
+      n.checkDay = s.day;
+      // 超过 decayAfterDays 没去看，之后每天 -1，最低降到当前阶段下限
+      var gap = s.day - (n.lastSeenDay || 0);
+      var floor = stageOf(id, n.affinity).min;
+      if (gap > LIM(id).decayAfterDays && n.affinity > floor) n.affinity = Math.max(floor, n.affinity - 1);
+    });
+  };
+
+  /* ---------- 面板内的操作 ---------- */
+  function enterView(v) {
+    cur.view = v;
+    cur.lastLine = '';
+    if (v !== 'chat') cur.topic = null;
+  }
+
+  function pickTopic(id) {
+    var list = D(id).topics || [];
     if (!list.length) return null;
     var pool = list.filter(function (t) { return t.id !== lastTopicId; });
     if (!pool.length) pool = list;
@@ -210,225 +308,289 @@
   }
 
   function startChat() {
-    if (talksLeft() <= 0) {
+    var id = cur.id;
+    if (talksLeft(id) <= 0) {
       enterView('home');
-      lastLine = D().lines.tooMuchChat;
+      cur.lastLine = line(id, 'tooMuchChat');
       return rebuild();
     }
-    topic = pickTopic();
-    if (!topic) { enterView('home'); return rebuild(); }
-    view = 'chat';
-    lastLine = '';
+    cur.topic = pickTopic(id);
+    if (!cur.topic) { enterView('home'); return rebuild(); }
+    cur.view = 'chat';
+    cur.lastLine = '';
     rebuild();
   }
 
-  // 口才：只放大正面的好感收益（系数见 config.js 的 G.SKILLS）
-  function charmGain(d) {
-    if (d > 0 && G.skills && G.skills.bonus) return Math.round(d * G.skills.bonus('charm'));
-    return d;
-  }
-
-  // 口才达到 extraOpt.lv 级时，聊天多出的一个选项（没有则 null）
-  function charmExtra() {
-    var list = G.SKILLS || [];
-    var c = null;
-    for (var i = 0; i < list.length; i++) if (list[i].id === 'charm') c = list[i];
-    if (!c || !c.extraOpt || !G.skills || !G.skills.level) return null;
-    return G.skills.level('charm') >= c.extraOpt.lv ? c.extraOpt : null;
-  }
-
   function chooseOpt(opt) {
-    var n = lin();
-    if (!n || !topic || !opt) return;
-    if (talksLeft() <= 0) { enterView('home'); lastLine = D().lines.tooMuchChat; return rebuild(); }
+    var id = cur.id, n = rec(id);
+    if (!n || !cur.topic || !opt) return;
+    if (talksLeft(id) <= 0) { enterView('home'); cur.lastLine = line(id, 'tooMuchChat'); return rebuild(); }
     var t = today();
     if (n.lastTalkDay !== t) { n.lastTalkDay = t; n.talksToday = 0; }
     n.talksToday += 1;
     n.lastSeenDay = t;
     var d = charmGain(opt.d);
-    addAffinity(d);
-    G.log('和林小满聊了聊，好感 ' + signed(d));
+    addAffinity(id, d);
+    G.log('和' + P(id).name + '聊了聊，好感 ' + signed(d));
     if (G.skills && G.skills.addXp && G.SKILL_XP) G.skills.addXp('charm', G.SKILL_XP.chat);
+    if (opt.xp && G.skills && G.skills.addXp) Object.keys(opt.xp).forEach(function (k) { G.skills.addXp(k, opt.xp[k]); });
     enterView('home');
-    lastLine = opt.r;
+    cur.lastLine = opt.r;
     rebuild();
   }
 
   function cancelChat() {
     enterView('home');
-    lastLine = D().lines.chatCancel;
+    cur.lastLine = line(cur.id, 'chatCancel');
     rebuild();
   }
 
-  function giveBurger(m) {
-    var n = lin();
-    if (!n || !m) return;
-    if (giftsLeft() <= 0) { enterView('home'); lastLine = D().lines.giftLimit; return rebuild(); }
-    if (!G.economy || !G.economy.canAfford(m.price)) {
-      if (G.ui && G.ui.toast) G.ui.toast('钱不够，送「' + m.name + '」需要 🪙' + m.price);
+  function giveGift(item) {
+    var id = cur.id, n = rec(id);
+    if (!n || !item) return;
+    if (giftsLeft(id) <= 0) { enterView('home'); cur.lastLine = line(id, 'giftLimit'); return rebuild(); }
+    if (!G.economy || !G.economy.canAfford(item.price)) {
+      if (G.ui && G.ui.toast) G.ui.toast('钱不够，送「' + item.name + '」需要 🪙' + item.price);
       return;
     }
-    G.economy.spend(m.price);
+    G.economy.spend(item.price);
     var t = today();
     if (n.giftDay !== t) { n.giftDay = t; n.giftToday = 0; }
     n.giftToday += 1;
     n.lastSeenDay = t;
-    var bonus = P().favorite === m.id ? 3 : 0;
-    addAffinity(4 + bonus);
-    G.log('送给林小满一个「' + m.name + '」，好感 ' + signed(4 + bonus));
+    var fav = P(id).favorite === item.id;
+    var d = 4 + (fav ? 3 : 0);
+    if (!item.noEffect && item.effect && G.economy.applyUse) G.economy.applyUse(null, { effect: item.effect });
+    addAffinity(id, d);
+    G.log('送给' + P(id).name + '一个「' + item.name + '」，好感 ' + signed(d));
     enterView('home');
-    lastLine = (D().gift && D().gift.react && D().gift.react[m.id]) || '谢谢。';
+    cur.lastLine = (D(id).gift && D(id).gift.react && D(id).gift.react[item.id]) || '谢谢。';
     rebuild();
   }
 
   function askStory() {
-    var n = lin();
+    var id = cur.id, n = rec(id);
     if (!n) return;
     n.lastSeenDay = today();
-    var list = D().stories || [];
+    var list = D(id).stories || [];
     var seg = list[n.flags.story];
-    view = 'story';
-    topic = null;
+    cur.view = 'story';
+    cur.topic = null;
     if (!seg) {
-      lastLine = D().lines.storyDone;
+      cur.lastLine = line(id, 'storyDone');
     } else if (n.affinity >= seg.at) {
       n.flags.story += 1;            // 递进解锁，解锁后可重读
-      lastLine = seg.ask;
+      cur.lastLine = seg.ask;
     } else {
-      lastLine = fmt(D().lines.storyLocked, { at: seg.at });
+      cur.lastLine = fmt(line(id, 'storyLocked'), { at: seg.at });
     }
     rebuild();
   }
 
+  // 程念的「内幕」：好感 >= 40 时每天一次，随机一只股票的风声（不保证准确）
+  function askRumor() {
+    var id = cur.id, n = rec(id);
+    if (!n) return;
+    var r = D(id).rumor || {};
+    n.lastSeenDay = today();
+    enterView('home');
+    if (n.rumorDay === today()) { cur.lastLine = r.done || ''; return rebuild(); }
+    n.rumorDay = today();
+    var list = G.STOCKS || [];
+    if (!list.length) cur.lastLine = r.none || '';
+    else {
+      var st = pick(list);
+      cur.lastLine = fmt(Math.random() < 0.5 ? r.up : r.down, { name: st.name });
+    }
+    if (G.skills && G.skills.addXp) G.skills.addXp('invest', 6);
+    rebuild();
+  }
+
   function dismiss(k) {
-    var n = lin();
+    var n = rec(cur.id);
     if (!n) return;
     n.pending = n.pending.filter(function (x) { return x !== k; });
     rebuild();
   }
 
   /* ---------- 面板内容 ---------- */
-  function buildCard(body, n) {
-    var p = P();
-    var st = stageOf(n.affinity);
-    var stages = D().stages || [];
-    var next = stages[stageIndex(n.affinity) + 1];
+  // 面板头像：用 render.js 的人物像素画 16x16 放大 3 倍
+  function portrait(id) {
+    var look = P(id).look;
+    if (!look || !G.render || !G.render.drawNpcSprite) return null;
+    var cv = document.createElement('canvas');
+    cv.width = 16;
+    cv.height = 16;
+    cv.style.width = '48px';
+    cv.style.height = '48px';
+    cv.style.imageRendering = 'pixelated';
+    cv.style.border = '2px solid #f3ead8';
+    cv.style.background = '#3a3350';
+    cv.style.float = 'right';
+    cv.style.marginLeft = '8px';
+    var g = cv.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    G.render.drawNpcSprite(g, 0, 0, 0, false, look);
+    return cv;
+  }
+
+  function buildCard(body, id, n) {
+    var p = P(id);
+    var st = stageOf(id, n.affinity);
+    var all = stages(id);
+    var next = all[stageIndex(id, n.affinity) + 1];
     var card = sec();
+    var pic = portrait(id);
+    if (pic) card.appendChild(pic);
     card.appendChild(el('div', 'shop-name', p.name + '（' + p.age + '岁）'));
     card.appendChild(el('div', 'shop-sub', p.job));
     card.appendChild(el('div', 'shop-price', '称号：「' + st.name + '」'));
     card.appendChild(meter('好感', n.affinity, 100, '#ff7eb6'));
     card.appendChild(el('div', 'shop-sub', next ? '距离「' + next.name + '」还差 ' + (next.min - n.affinity) : '已经是最亲近的阶段了'));
-    var chatUsed = L().chatPerDay - talksLeft();
-    var giftUsed = L().giftPerDay - giftsLeft();
-    card.appendChild(el('div', 'shop-sub', '今天：聊天 ' + chatUsed + '/' + L().chatPerDay + '　送礼 ' + giftUsed + '/' + L().giftPerDay));
+    var chatUsed = chatLimit(id) - talksLeft(id);
+    var giftUsed = LIM(id).giftPerDay - giftsLeft(id);
+    card.appendChild(el('div', 'shop-sub', '今天：聊天 ' + chatUsed + '/' + chatLimit(id) + '　送礼 ' + giftUsed + '/' + LIM(id).giftPerDay));
     body.appendChild(card);
   }
 
-  function buildPending(body, n) {
+  function buildPending(body, id, n) {
     (n.pending || []).forEach(function (k) {
-      var ev = (D().events || {})[k];
+      var ev = (D(id).events || {})[k];
       if (!ev) return;
       var box = sec();
       box.classList.add('npc-event');
       box.appendChild(el('div', 'shop-name', '✦ ' + ev.title));
       box.appendChild(say(ev.text));
-      box.appendChild(bigBtn(D().lines.eventDismiss, function () { dismiss(k); }));
+      box.appendChild(bigBtn(line(id, 'eventDismiss') || '知道了', function () { dismiss(k); }));
       body.appendChild(box);
     });
   }
 
-  function buildHome(body) {
-    body.appendChild(bigBtn('聊聊天（今天还能聊 ' + talksLeft() + ' 次）', startChat));
-    body.appendChild(bigBtn('送她一个汉堡（今天' + (giftsLeft() > 0 ? '还没送' : '已经送过') + '）', function () {
+  function buildHome(body, id, n) {
+    body.appendChild(bigBtn('聊聊天（今天还能聊 ' + talksLeft(id) + ' 次）', startChat));
+    body.appendChild(bigBtn((GIFT_LABEL[id] || '送礼') + '（今天' + (giftsLeft(id) > 0 ? '还没送' : '已经送过') + '）', function () {
       enterView('gift');
-      lastLine = '想请她吃哪一个？';
+      cur.lastLine = '想送哪一样？';
       rebuild();
     }));
-    body.appendChild(bigBtn('问问她的事', askStory));
+    body.appendChild(bigBtn(STORY_LABEL[id] || '问问他的事', askStory));
+    if (id === 'tech' && n.affinity >= 40) {
+      var done = n.rumorDay === today();
+      body.appendChild(bigBtn((D(id).rumor && D(id).rumor.ask) + (done ? '（今天已问过）' : ''), askRumor, '', done));
+    }
+    if (id === 'mayor') {
+      body.appendChild(bigBtn('市政事务 · 项目与提案', function () { enterView('proj'); rebuild(); }));
+    }
   }
 
-  function buildChat(body) {
-    if (!topic) return;
-    topic.opts.forEach(function (opt) {
+  function buildChat(body, id) {
+    if (!cur.topic) return;
+    cur.topic.opts.forEach(function (opt) {
       body.appendChild(bigBtn(opt.t, function () { chooseOpt(opt); }));
     });
-    var extra = charmExtra();
+    var extra = charmOpt(id);
     if (extra) body.appendChild(bigBtn(extra.t, function () { chooseOpt(extra); }));
     body.appendChild(bigBtn('算了，不聊了', cancelChat, 'ghost'));
   }
 
-  function buildGift(body) {
+  function buildGift(body, id) {
     var list = el('div', 'shop-list');
-    var menu = (G.BURGER && G.BURGER.menu) || [];
-    menu.forEach(function (m) {
+    giftItems(id).forEach(function (m) {
       var row = el('div', 'shop-item');
       var info = el('div', 'shop-info');
       info.appendChild(el('div', 'shop-name', m.name));
-      info.appendChild(el('div', 'shop-sub', m.desc));
-      info.appendChild(el('div', 'shop-price', '🪙 ' + m.price + (P().favorite === m.id ? '  ♥她最爱' : '')));
+      info.appendChild(el('div', 'shop-sub', m.desc || ''));
+      info.appendChild(el('div', 'shop-price', '🪙 ' + m.price + (P(id).favorite === m.id ? '  ♥最爱' : '')));
       row.appendChild(info);
-      row.appendChild(bigBtn('送 🪙' + m.price, function () { giveBurger(m); }, 'small'));
+      row.appendChild(bigBtn('送 🪙' + m.price, function () { giveGift(m); }, 'small'));
       list.appendChild(row);
     });
     body.appendChild(list);
     body.appendChild(bigBtn('返回', function () { enterView('home'); rebuild(); }, 'ghost'));
   }
 
-  function buildStory(body, n) {
-    var list = D().stories || [];
+  function buildStory(body, id, n) {
+    var list = D(id).stories || [];
     for (var i = 0; i < n.flags.story && i < list.length; i++) {
       var box = sec();
       box.appendChild(el('div', 'shop-name', '· ' + list[i].title));
       box.appendChild(el('div', 'story-text', list[i].text));
       body.appendChild(box);
     }
-    if (!n.flags.story) body.appendChild(el('div', 'sec', '还没有听过她的故事。'));
+    if (!n.flags.story) body.appendChild(el('div', 'sec', '还没有听过的故事。'));
     body.appendChild(bigBtn('返回', function () { enterView('home'); rebuild(); }, 'ghost'));
   }
 
-  function build(body) {
-    var n = lin();
-    if (!n) return;
-    buildCard(body, n);
-    buildPending(body, n);
+  function buildProj(body) {
+    if (G.city && G.city.buildProjects) G.city.buildProjects(body);
+    body.appendChild(bigBtn('返回', function () { enterView('home'); rebuild(); }, 'ghost'));
+  }
 
-    var speech = lastLine;
-    if (view === 'chat' && topic) speech = topic.prompt;
-    if (!speech && view === 'home') speech = greet;
+  // 面板签名：数值或状态变化时才整体重建（不打断点击）
+  function sig() {
+    if (!cur) return '';
+    var id = cur.id, n = rec(id) || {};
+    return [
+      id, cur.view, n.affinity, (n.pending || []).length, talksLeft(id), giftsLeft(id),
+      npc.inHours(id) ? 1 : 0, cur.lastLine, cur.topic ? cur.topic.id : '',
+      n.rumorDay, n.flags ? n.flags.story : 0,
+      G.city && G.city.sig ? G.city.sig() : '',
+    ].join('|');
+  }
+
+  function build(body) {
+    var id = cur.id, n = rec(id);
+    if (!n) return;
+    lastSig = sig();
+    buildCard(body, id, n);
+    if (id === 'mayor' && G.city && G.city.buildIndexes) G.city.buildIndexes(body);
+    buildPending(body, id, n);
+
+    var speech = cur.lastLine;
+    if (cur.view === 'chat' && cur.topic) speech = cur.topic.prompt;
+    if (!speech && cur.view === 'home') speech = cur.greet;
     if (speech) body.appendChild(say(speech));
 
-    if (view === 'chat') buildChat(body);
-    else if (view === 'gift') buildGift(body);
-    else if (view === 'story') buildStory(body, n);
-    else buildHome(body);
+    if (cur.view === 'chat') buildChat(body, id);
+    else if (cur.view === 'gift') buildGift(body, id);
+    else if (cur.view === 'story') buildStory(body, id, n);
+    else if (cur.view === 'proj') buildProj(body, id);
+    else buildHome(body, id, n);
   }
 
-  function openDialog() {
-    var n = lin();
+  function tick() {
+    if (!cur || !G.ui || !G.ui.rebuildPanel) return;
+    if (sig() !== lastSig) G.ui.rebuildPanel();
+  }
+
+  npc.open = function (id) {
+    id = id || 'lin';
+    var n = rec(id);
     if (!n || !G.ui || !G.ui.openPanel) return;
     var s = G.state;
-    var longAway = s.day - n.lastSeenDay > L().decayAfterDays;
+    var longAway = s.day - n.lastSeenDay > LIM(id).decayAfterDays;
     n.lastSeenDay = s.day;
-    enterView('home');
-    lastLine = longAway ? D().lines.longAway : '';
-    greet = pick(stageOf(n.affinity).greet || ['……']);
-    G.ui.openPanel({ title: P().name, build: build });
-  }
+    cur = {
+      id: id, view: 'home', topic: null,
+      lastLine: longAway ? line(id, 'longAway') : '',
+      greet: pick(stageOf(id, n.affinity).greet || ['……']),
+    };
+    lastSig = sig();
+    G.ui.openPanel({ title: P(id).title || P(id).name, build: build, tick: tick });
+  };
 
-  npc.open = openDialog;
-
-  // 点到她：先走到她身边（她站的格子本身不可走），到了再打开面板
+  // 点到 NPC：先走到她/他身边（站位格本身不可走），到了再打开面板
   npc.handleClick = function (gx, gy) {
-    if (!npc.blocks(gx, gy)) return false;
+    var id = npc.at(gx, gy);
+    if (!id) return false;
     var s = G.state;
     if (!s || !G.player) return true;
     var p = s.player;
     var c = { gx: Math.floor(p.x / G.TILE), gy: Math.floor(p.y / G.TILE) };
-    var sp = npc.spot();
+    var sp = npc.spot(id);
     var adjacent = Math.abs(c.gx - sp.gx) + Math.abs(c.gy - sp.gy) === 1;
-    if (adjacent && !(p.path && p.path.length)) { openDialog(); return true; }
-    if (s.work) { G.log('打工中，等这一班结束再去找她'); return true; }
+    if (adjacent && !(p.path && p.path.length)) { npc.open(id); return true; }
+    if (s.work) { G.log('打工中，等这一班结束再去找人'); return true; }
 
     var cands = [
       { gx: sp.gx - 1, gy: sp.gy },
@@ -439,9 +601,9 @@
     for (var i = 0; i < cands.length; i++) {
       var cd = cands[i];
       if (G.player.isBlocked && G.player.isBlocked(cd.gx, cd.gy)) continue;
-      if (G.player.walkTo && G.player.walkTo(cd.gx, cd.gy, openDialog)) return true;
+      if (G.player.walkTo && G.player.walkTo(cd.gx, cd.gy, function () { npc.open(id); })) return true;
     }
-    G.log('走不到她身边');
+    G.log('走不到' + P(id).name + '身边');
     return true;
   };
 

@@ -1,20 +1,23 @@
 /* ============================================================
- * 像素小家 —— 林小满的文案（npc-data.js）
- * 只往 G.NPC_DATA 上挂数据，不含逻辑。人设见 config.js 的 G.NPCS.lin。
- * 结构：
+ * 像素小家 —— NPC 文案（npc-data.js）
+ * 只往 G.NPC_DATA 上挂数据，不含逻辑。人设见 config.js 的 G.NPCS。
+ * 按 NPC id 分组：G.NPC_DATA.lin 在本文件；G.NPC_DATA.mayor / .tech 在 npc-data2.js。
+ * 每位 NPC 的结构（缺的字段由 npc.js 回退到林小满的 lines）：
  *   stages   好感称号（min 为阶段下限）及该阶段的开场白（随机取一句）
  *   topics   「聊聊天」话题池：prompt 为她开口的话；opts 三个回答，d 为好感变化，r 为她的回复
  *   stories  「问问她的事」故事，at 为解锁所需好感，按顺序递进，最后一段是她的心事
  *   events   好感跨过阈值时的一次性事件（reward：money 或需求增量）
  *   gift     送汉堡后的回应（按口味）
  *   lines    其他固定台词
+ *   charmOpt（可选）口才 Lv5 的专属选项；林小满的选项写在 config.js 的 G.SKILLS.charm.extraOpt
  * ============================================================ */
 (function () {
   'use strict';
 
   var G = (window.G = window.G || {});
 
-  G.NPC_DATA = {
+  G.NPC_DATA = G.NPC_DATA || {};
+  G.NPC_DATA.lin = {
     stages: [
       { min: 0,  name: '陌生', greet: ['……哦，新客人？菜单在柜台上，想好了叫我。', '来了？位子随便坐，水自己倒。'] },
       { min: 20, name: '认识', greet: ['哟，是你啊。今天还吃小汉堡吗？', '又来啦。今天我爸心情不错，肉饼煎得挺好。'] },

@@ -88,16 +88,32 @@ G.NEED_DECAY = { energy:0.25, hunger:0.30, mood:0.12, hygiene:0.18 }; // 每真�
  * trees：不可走的装饰树（单格）。
  */
 G.STREET = {
-  w: 20, h: 10,
+  w: 24, h: 10,
   home: { x: 2,  y: 1, w: 4, h: 3, door: { gx: 3,  gy: 3 } },
-  shop: { x: 10, y: 1, w: 4, h: 3, door: { gx: 11, gy: 3 }, sign: { gx: 10, gy: 1 } },
-  cardroom: { x: 16, y: 1, w: 4, h: 3, door: { gx: 17, gy: 3 }, sign: { gx: 16, gy: 1 } },
+  hall: { x: 6,  y: 0, w: 5, h: 4, door: { gx: 8,  gy: 3 } },          // 市政厅（石质大楼，白天 9~17 点办公，见 city.js）
+  shop: { x: 12, y: 1, w: 4, h: 3, door: { gx: 13, gy: 3 }, sign: { gx: 12, gy: 1 } },
+  cardroom: { x: 17, y: 1, w: 4, h: 3, door: { gx: 18, gy: 3 }, sign: { gx: 17, gy: 1 } },
+  corner: { x: 21, y: 1, w: 3, h: 3 },                                  // 街角小公园（可走，装饰；科技女生傍晚在旁边的长椅）
+  props: [                                                              // 街边道具（不可走）
+    { kind: 'bench', gx: 21, gy: 4 },
+    { kind: 'lamp',  gx: 23, gy: 4 },
+  ],
   spawn: { gx: 3, gy: 4 },
   trees: [
-    { gx: 0,  gy: 0 }, { gx: 6,  gy: 0 }, { gx: 15, gy: 0 },
-    { gx: 0,  gy: 2 }, { gx: 8,  gy: 2 }, { gx: 15, gy: 2 },
-    { gx: 5,  gy: 9 }, { gx: 12, gy: 9 },
+    { gx: 0,  gy: 0 }, { gx: 5,  gy: 0 }, { gx: 11, gy: 0 }, { gx: 16, gy: 0 }, { gx: 23, gy: 1 },
+    { gx: 0,  gy: 2 }, { gx: 16, gy: 2 },
+    { gx: 5,  gy: 9 }, { gx: 12, gy: 9 }, { gx: 19, gy: 9 },
   ],
+};
+
+/* ---------- 城市（文案常量；指数与项目数据在 js/city-data.js，逻辑在 js/city.js） ---------- */
+G.CITY = {
+  name: '奥特兰迪斯',
+  slogan: '这座城市不缺钱，缺的是把钱花在人身上的人。',
+  intro: '霓虹与港口之城。商会说了算，帮派管街头，市政厅的灯每晚都亮着，却没人知道灯为谁而亮。你刚搬回来，房租还欠着，朋友却比你想象的多。',
+  districts: { port: '东港码头', old: '旧城区', bank: '金融街', south: '城南选区', north: '城北居民区' },
+  hall: '奥特兰迪斯市政厅',
+  hallHours: '9:00 ~ 17:00 办公',
 };
 
 /* ---------- 牌场（外景店门 G.STREET.cardroom.door，见 street.js） ----------
@@ -135,8 +151,9 @@ G.BURGER = {
   },
 };
 
-/* ---------- NPC：林小满（女，汉堡店店主的女儿） ----------
- * 人设只放这里；对话、故事、事件文案在 js/npc-data.js，交互在 js/npc.js。
+/* ---------- NPC（三位）：林小满 / 市政厅议员 周慕白 / 科技女生 程念 ----------
+ * 人设只放这里；对话、故事、事件文案在 js/npc-data.js（林小满）与 js/npc-data2.js（周慕白、程念），交互在 js/npc.js。
+ * 通用字段：spot 站位格；hours 街上出现的时段；startAffinity 开局好感；look 像素造型；gifts 送礼清单（林小满用汉堡菜单）。
  * spot：白天营业时站在街上的格子（人行道，紧挨店门口的右侧）；夜里不在街上。
  * limits：每天有效聊天次数、送礼次数、好感几天不见开始衰减、打工加成门槛。 */
 G.NPCS = {
@@ -153,7 +170,10 @@ G.NPCS = {
     flaw: '答应别人的事总拖到最后一刻；心情不好时会把抹布摔得很响。',
     secret: '偷偷报了外地的插画研修班，学费是这两年攒下的。录取通知压在抽屉最底下，还没敢告诉爸爸。',
     favorite: 'cheese',                       // 最爱的口味：送这个额外 +3 好感
-    spot: { gx: 13, gy: 4 },
+    spot: { gx: 15, gy: 4 },
+    hours: { from: 8, to: 22 },               // 白天营业时在街上（与汉堡店营业时间一致）
+    startAffinity: 10,
+    look: { hair: '#8c4a3a', top: '#5aa88a', bottom: '#4a4f7a', hairStyle: 'long', legs: 'skirt', acc: 'apron' },
     limits: {
       chatPerDay: 2,                          // 每天有效聊天次数
       giftPerDay: 1,                          // 每天送礼次数
@@ -161,6 +181,74 @@ G.NPCS = {
       shiftBonusAt: 60,                       // 好感达到此值，打工工资 +10%
       shiftBonus: 0.1,
     },
+  },
+
+  /* 市政厅议员：玩家的朋友。白天 9~17 点在市政厅门口；面板即「市政厅面板」（指数、项目、对话、礼物）。
+   * 文案在 npc-data2.js；提案与项目在 city.js。 */
+  mayor: {
+    id: 'mayor',
+    name: '周慕白',
+    title: '市政厅 · 周慕白',
+    gender: '男',
+    age: 43,
+    job: '奥特兰迪斯市议会议员（城南选区）',
+    family: '父亲周德海是东港码头的搬运工。十几年前一次吊钩事故后，赔偿拖了三个月，最后只领到一句“以后小心点”。他十二岁就在码头边的木箱上等过父亲下工。',
+    background: '靠奖学金读完法学院，回城做了几年律师，专替码头工人和小商户打官司，赢过几次，也输过更多次。三年前被城南的选民推上议会，理由很简单：“他说话像个人。”',
+    personality: '说话慢，爱打比方，习惯把一件事拆成三件。有原则，也懂得变通；固执起来像码头的老石头。被人说“理想主义”会沉默一会儿，然后认真反驳。',
+    catchphrase: '先别急，咱们先算算账。',
+    hobbies: ['收集旧城的老地图，说“旧图纸能看出这座城是怎么烂掉的”', '周末去东港钓鱼，钓不到也坐一下午', '下象棋，常输给林小满的汉堡（他承认是输给了饭）'],
+    flaw: '总想“一步一步来”，决定一拖再拖；嘴上不认错，却会悄悄把错改掉。',
+    secret: '竞选时收过“港口联盟”的一笔捐款，至今还压在他的账上。他在用基金一点点还，还要装作什么都没发生。父亲事故报告的副本，他一直收在抽屉里，从没给任何人看过。',
+    politics: '主张公开审计、社区诊所、码头安全和小商户贷款。他也清楚，要推动任何一件事，都得和商会吃过饭、和帮派谈过条件。他的原则是：能推动的，就是能推动的。',
+    favorite: 'atlas',                         // 最爱的礼物：送这个额外 +3 好感
+    spot: { gx: 10, gy: 4 },                   // 市政厅门前右侧的人行道
+    hours: { from: 9, to: 17 },
+    startAffinity: 30,                         // 开局就是「认识」——朋友
+    look: { hair: '#5b5552', top: '#2e3a55', bottom: '#24262f', hairStyle: 'short', legs: 'pants', acc: 'tie' },
+    limits: {
+      chatPerDay: 2,
+      giftPerDay: 1,
+      decayAfterDays: 4,
+    },
+    gifts: [
+      { id: 'tea',   name: '一罐老茶砖',       price: 40,  effect: { mood: 3 },     desc: '心情+3' },
+      { id: 'chess', name: '一副象棋',         price: 90,  effect: { mood: 5 },     desc: '心情+5' },
+      { id: 'fish',  name: '码头早市的鲜鱼',   price: 120, effect: { hunger: 40 },  desc: '饱腹+40' },
+      { id: 'atlas', name: '复刻版旧城地图',   price: 180, effect: { mood: 8 },     desc: '心情+8（他最爱）' },
+    ],
+  },
+
+  /* 科技公司女生：星河科技数据组的普通员工。傍晚 18~22 点在街角长椅旁。文案在 npc-data2.js。 */
+  tech: {
+    id: 'tech',
+    name: '程念',
+    title: '程念',
+    gender: '女',
+    age: 25,
+    job: '星河科技数据组分析员（星河科技是虚构的互联网公司，总部在金融街）',
+    family: '父母在城北开一家小五金店，每次通话都问她是不是又没吃饭。大学读计算机，拿过编程比赛的奖，毕业时以为能做大事。',
+    background: '进星河两年。前半年的方案很亮眼，后来组长换了人，她的方案开始被署上别人的名字，她被调去做没人愿意做的报表。',
+    personality: '外表冷静，说话快，偶尔冒出一两个技术梗。很会吐槽，对朋友很护短。焦虑时会吃辣条，吃完会很愧疚地把包装折成小方块。',
+    catchphrase: '理论上不该这样。',
+    hobbies: ['夜跑，固定绕东港的堤坝跑五公里', '拼乐高微缩模型，最近在做一座灯塔', '看黑白老电影，嘴里跟着念台词'],
+    flaw: '说话太快，容易把别人绕进去；熬夜成瘾，凌晨三点的她比白天更诚实。',
+    secret: '她在备份服务器里看到一组奇怪的港口货运记录，几家空壳公司的名字和“老鹰帮”的老账户对得上。报告被高层压下了，她偷偷存了一份，还没想好该交给谁。',
+    favorite: 'coffee',
+    spot: { gx: 22, gy: 4 },                   // 街角长椅（21,4）右边
+    hours: { from: 18, to: 22 },
+    startAffinity: 30,                         // 开局就是「认识」
+    look: { hair: '#3a2a4a', top: '#7fb8e0', bottom: '#3b4a6b', hairStyle: 'bob', legs: 'pants', acc: 'bag' },
+    limits: {
+      chatPerDay: 2,
+      giftPerDay: 1,
+      decayAfterDays: 3,
+    },
+    gifts: [
+      { id: 'milktea', name: '一杯芋泥奶茶', price: 18,  effect: { hunger: 10, mood: 5 }, desc: '饱腹+10 心情+5' },
+      { id: 'coffee',  name: '冰美式',       price: 25,  effect: { energy: 12 },          desc: '精力+12（她最爱）' },
+      { id: 'spicy',   name: '一包辣条',     price: 8,   effect: { mood: 6 },             desc: '心情+6' },
+      { id: 'lego',    name: '一盒乐高小灯塔', price: 150, effect: { mood: 12 },           desc: '心情+12' },
+    ],
   },
 };
 
@@ -170,7 +258,7 @@ G.NPCS = {
  *       unlocks 解锁列表 [{lv, text}]。
  * 效果系数的用法：
  *   stamina  打工/电脑工作的精力消耗 × effect      （burger.js / economy.js）
- *   charm    林小满聊天的正面好感收益 × effect；extraOpt 为 Lv5 多出的选项（npc.js）
+ *   charm    所有 NPC 聊天的正面好感收益 × effect；Lv5 多出一个专属聊天选项，Lv7 每天多聊 1 次，Lv10 好感事件奖励翻倍（npc.js）
  *   invest   炒股手续费 × effect                     （由 js/stocks.js 读取，未实现前仅占位）
  *   poker    牌局读牌/判断 × effect                  （由 js/poker.js 读取，未实现前仅占位）
  *   craft    打工与电脑工作的收入 × effect            （burger.js / economy.js）
@@ -200,7 +288,11 @@ G.SKILLS = [
     effect: function (lv) { return 1 + 0.04 * lv; },
     text: function (lv) { return '聊天好感收益 +' + (lv * 4) + '%'; },
     extraOpt: { lv: 5, t: '顺口夸她一句手艺好', r: '行吧，算你有眼光。', d: 3 },
-    unlocks: [{ lv: 5, text: '林小满聊天多一个选项「顺口夸她一句手艺好」' }],
+    unlocks: [
+      { lv: 5, text: '聊天多一个专属选项（林小满：「顺口夸她一句手艺好」；周慕白、程念也各有一个）' },
+      { lv: 7, text: '每天可对每位 NPC 多聊 1 次' },
+      { lv: 10, text: 'NPC 的好感事件奖励翻倍（金钱、需求、技能经验）' },
+    ],
   },
   {
     id: 'invest', name: '投资', icon: '📈', maxLv: 10, need: G.xpNeed,
@@ -311,8 +403,9 @@ G.homeDoorFront = function (room) { var d = G.homeDoor(room); return { gx: d.gx,
  *   scene: 'home',         // 'home'|'street'：室内 / 门口外景（外景时家具与宠物不参与）
  *   burger: { day, shifts }, // 汉堡店：当天（day）已打班数，换日自动重置
  *   work: null | { t, total }, // 正在打工：t 已过秒数，total 总秒数；非空时玩家不能移动/使用
- *   npcs: { lin: { affinity, lastSeenDay, lastTalkDay, talksToday, giftDay, giftToday, checkDay,
- *                  flags: { story, events, sketch }, pending } },   // 林小满，字段见 npc.js
+ *   npcs: { lin|mayor|tech: { affinity, lastSeenDay, lastTalkDay, talksToday, giftDay, giftToday, checkDay,
+ *                  flags: { story, events, sketch }, pending, rumorDay } },   // 三位 NPC，字段见 npc.js
+ *   city: { idx: {safety,prosperity,people,clean}, active: [], done: {}, lastDay, ending, endingShown },   // 城市，见 city.js
  *   skills: { [id]: { xp, lv } },   // 技能（js/skills.js 通过 G.registerModule 注册）
  *   // 其他已注册模块的字段同样挂在这里（G.registerModule 的 id）
  * }
@@ -421,13 +514,7 @@ G.newState = function () {
     scene: 'home',
     burger: { day: 1, shifts: 0 },
     work: null,
-    npcs: {
-      lin: {
-        affinity: 10, lastSeenDay: 1, lastTalkDay: 0, talksToday: 0,
-        giftDay: 0, giftToday: 0, checkDay: 1,
-        flags: { story: 0, events: {}, sketch: false }, pending: [],
-      },
-    },
+    npcs: G.npc && G.npc.fill ? G.npc.fill(null, 1) : {},   // 各 NPC 的默认状态由 npc.js 生成
   };
   G.modules.forEach(function (m) { s[m.id] = m.defaults(); });   // 已注册模块的存档字段
   return s;

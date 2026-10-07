@@ -10,6 +10,8 @@
  *       外景：点林小满 → 走到她身边聊天（npc.js）；点自家小屋 → 走到门口再回家；
  *             点汉堡店 → 走到店门前开店面板（burger.js）
  *             点牌场 → 营业时间内走到门前，调用 G.cardroom.enter()（未实现则提示「牌场还没开张」）
+ *             点市政厅 → 办公时间内走到门前，调用 G.city.openHall()（周慕白的面板）；下班则提示
+ *             点街上的 NPC（林小满 / 周慕白 / 程念）→ 走到身边开对话面板（npc.js）
  * ============================================================ */
 (function () {
   'use strict';
@@ -83,6 +85,10 @@
       walkThen(hf, function () { street.leave(); });
       return true;
     }
+    if (inRect(S.hall, gx, gy)) {
+      hallDoor();
+      return true;
+    }
     if (inRect(S.shop, gx, gy)) {
       if (G.burger && G.burger.onDoorClick) G.burger.onDoorClick();
       else G.log('汉堡店还在装修');
@@ -94,6 +100,18 @@
     }
     return false;
   };
+
+  // 市政厅门：办公时间（9:00~17:00）内走到门前，打开市政厅面板；下班只提示
+  function hallDoor() {
+    if (!(G.city && G.city.mayorAvailable && G.city.mayorAvailable())) {
+      G.log('市政厅已经下班了（9:00 ~ 17:00 办公）');
+      return;
+    }
+    var door = G.STREET.hall.door;
+    walkThen({ gx: door.gx, gy: door.gy + 1 }, function () {
+      if (G.city && G.city.openHall) G.city.openHall();
+    });
+  }
 
   // 牌场门：营业时间外只提示；营业时走到门前，再交给 G.cardroom.enter()（内容见 cardroom.js）
   function cardroomDoor() {

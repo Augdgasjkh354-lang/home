@@ -52,18 +52,22 @@
     return !!(G.state && G.state.work);
   }
 
-  // 外景障碍：自家/汉堡店/牌场建筑占格、装饰树、林小满站的格子（白天营业时）
+  // 外景障碍：自家/市政厅/汉堡店/牌场建筑占格、装饰树与街边道具、街上 NPC 站的格子（营业/办公时段内）
   function streetSolid(gx, gy) {
     const S = G.STREET;
     if (G.npc && G.npc.blocks && G.npc.blocks(gx, gy)) return true;
-    const rects = [S.home, S.shop, S.cardroom];
+    const rects = [S.home, S.hall, S.shop, S.cardroom];
     for (let i = 0; i < rects.length; i++) {
       const r = rects[i];
-      if (gx >= r.x && gx < r.x + r.w && gy >= r.y && gy < r.y + r.h) return true;
+      if (r && gx >= r.x && gx < r.x + r.w && gy >= r.y && gy < r.y + r.h) return true;
     }
     const trees = S.trees || [];
     for (let i = 0; i < trees.length; i++) {
       if (trees[i].gx === gx && trees[i].gy === gy) return true;
+    }
+    const props = S.props || [];
+    for (let i = 0; i < props.length; i++) {
+      if (props[i].gx === gx && props[i].gy === gy) return true;
     }
     return false;
   }
