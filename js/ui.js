@@ -63,6 +63,19 @@
 .meter { display:flex; align-items:center; gap:6px; font-size:12px; margin-top:4px; }
 .meter .lbl { min-width:3em; }
 .meter .bar { width:120px; }
+.bigbtn { display:block; width:100%; min-height:44px; font-size:14px; margin-top:6px; text-align:center; }
+.bigbtn.small { width:auto; min-height:40px; font-size:13px; margin-top:0; flex:none; }
+.bigbtn.ghost { background:#2a2636; }
+.npc-say { margin-top:8px; padding:6px 8px; background:#3a3350; border-left:4px solid #ff7eb6; font-size:13px; line-height:18px; }
+.npc-event { border-color:#ffd84a; }
+.story-text { font-size:12px; line-height:18px; color:#e6dcc6; margin-top:4px; }
+.menu-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px dashed #7b719c; }
+.menu-row:first-of-type { border-top:none; }
+.menu-row .shop-info { flex:1; min-width:0; }
+.menu-buy { flex:none; min-height:40px; font-size:13px; }
+.menu-buy.poor { opacity:.55; }
+.shift-meter { margin-top:6px; }
+.shift-meter .bar { width:100%; flex:1; }
 
 #sel-bar { position:fixed; left:50%; bottom:12px; transform:translateX(-50%); display:none; align-items:center; justify-content:center; flex-wrap:wrap; gap:6px; background:#2a2636f0; border:2px solid #f3ead8; box-shadow:0 0 0 2px #1c1a24; padding:6px 8px; font-size:12px; z-index:7; max-width:94vw; }
 #sel-bar .sel-name { font-size:13px; }
@@ -82,6 +95,7 @@
 
   var els = { needs: {}, inited: false };
   var shopOpen = false;
+  var custom = null;    // 其他模块打开的面板：{title, build(body), tick()}，如汉堡店 / 林小满
   var shopTab = 'furniture';
   var refreshers = [];
   var renderedSig = '';
@@ -632,6 +646,7 @@
       return;
     }
     if (typeof tab === 'string') shopTab = tab;
+    custom = null;
     shopOpen = true;
     els.panel.classList.remove('hidden');
     layout();
@@ -640,9 +655,39 @@
 
   ui.closeShop = function () {
     shopOpen = false;
+    custom = null;
     refreshers = [];
     if (els.panel) els.panel.classList.add('hidden');
   };
+
+  /* ---------------- 通用面板（汉堡店、林小满等） ---------------- */
+  // opts = {title, build(body), tick?()}；build 负责填充内容，tick 每 0.2 秒调用一次做原地刷新
+  function paintCustom() {
+    if (!els.panel || !custom) return;
+    var panel = els.panel;
+    panel.innerHTML = '';
+    var head = el('div', 'panel-head');
+    head.appendChild(el('span', 'panel-title', String(custom.title || '')));
+    head.appendChild(btn('关闭 ×', 'pbtn', function () { ui.closeShop(); }));
+    panel.appendChild(head);
+    var body = el('div', 'panel-body');
+    panel.appendChild(body);
+    custom.build(body);
+    if (custom.tick) custom.tick();
+  }
+
+  ui.openPanel = function (opts) {
+    if (!els.panel || !opts || typeof opts.build !== 'function') return;
+    shopOpen = false;
+    refreshers = [];
+    custom = opts;
+    els.panel.classList.remove('hidden');
+    layout();
+    paintCustom();
+  };
+
+  // 内容有变化时（如点了按钮）整体重建面板内容
+  ui.rebuildPanel = function () { if (custom) paintCustom(); };
 
   /* ---------------- 建造 / 移动 ---------------- */
   // 本地合法性校验：越界、wallItem 必须 y==0、与任何已有家具重叠（含 walkable）均不允许
@@ -826,7 +871,7 @@
       ui.toast(wasMove ? '已取消移动' : '已取消放置');
       return;
     }
-    if (shopOpen) {
+    if (shopOpen || custom) {
       ui.closeShop();
       return;
     }
@@ -868,6 +913,8 @@
     if (shopOpen) {
       if (tabSig() !== renderedSig) renderShop();
       else refreshShopNow();
+    } else if (custom && custom.tick) {
+      custom.tick();
     }
   };
 

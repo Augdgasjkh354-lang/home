@@ -7,7 +7,8 @@
  *   G.street.leave()                            外景 → 室内（玩家出现在室内门口）
  *   G.street.handleClick(gx,gy) -> bool         点到门/店时的处理；返回是否已处理
  *       室内：点底墙上的门 → 走到门口再出门
- *       外景：点自家小屋 → 走到门口再回家；点汉堡店 → 提示装修中（暂无交互）
+ *       外景：点林小满 → 走到她身边聊天（npc.js）；点自家小屋 → 走到门口再回家；
+ *             点汉堡店 → 走到店门前开店面板（burger.js）
  * ============================================================ */
 (function () {
   'use strict';
@@ -73,6 +74,8 @@
       return true;
     }
 
+    if (G.npc && G.npc.handleClick && G.npc.handleClick(gx, gy)) return true;
+
     var S = G.STREET;
     if (inRect(S.home, gx, gy)) {
       var hf = { gx: S.home.door.gx, gy: S.home.door.gy + 1 };
@@ -80,7 +83,8 @@
       return true;
     }
     if (inRect(S.shop, gx, gy)) {
-      G.log('汉堡店还在装修');
+      if (G.burger && G.burger.onDoorClick) G.burger.onDoorClick();
+      else G.log('汉堡店还在装修');
       return true;
     }
     return false;

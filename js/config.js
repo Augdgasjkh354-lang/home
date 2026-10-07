@@ -2,7 +2,7 @@
  * 像素小家 Pixel Home —— 共享契约（所有模块必须遵守）
  * 全局命名空间：window.G
  * 每个模块文件只做一件事：往 G 上挂自己的对象，不得修改别人的文件。
- * 脚本加载顺序：config → render → player → pet → economy → street → ui → main
+ * 脚本加载顺序：config → render → player → pet → economy → street → npc-data → npc → burger → ui → main
  * 画面：俯视角，Canvas 2D，纯代码绘制像素图（不使用任何外部图片）
  * ============================================================ */
 window.G = window.G || {};
@@ -91,6 +91,59 @@ G.STREET = {
   ],
 };
 
+/* ---------- 汉堡店「林记汉堡」（外景店门 G.STREET.shop.door，见 burger.js） ----------
+ * 营业：游戏内 open 点到 close 点之间；打烊时只能看菜单，不能买、不能打工。
+ * menu.effect：购买后立即结算到需求（经 G.economy.applyUse，夹到 0~100）。
+ * shift：兼职「打工一班」——真实时间 duration 秒，结束时结算 cost 与 pay。
+ *   pay 会乘上林小满的加成（好感 >= NPCS.lin.limits.shiftBonusAt 时 +shiftBonus）。 */
+G.BURGER = {
+  name: '林记汉堡',
+  open: 8,
+  close: 22,
+  menu: [
+    { id: 'small',  name: '小汉堡',         price: 8,  effect: { hunger: 35 },                        desc: '饱腹+35' },
+    { id: 'cheese', name: '芝士汉堡',       price: 14, effect: { hunger: 55, mood: 4 },               desc: '饱腹+55 心情+4' },
+    { id: 'set',    name: '套餐（含饮料）', price: 22, effect: { hunger: 70, mood: 8, energy: 5 },    desc: '饱腹+70 心情+8 精力+5' },
+  ],
+  shift: {
+    duration: 12,                                     // 真实秒
+    pay: 45,                                          // 工资（元）
+    cost: { energy: -20, hunger: -12, mood: -3 },     // 结束时的需求变化
+    minEnergy: 25,                                    // 低于此值不能接班
+    minHunger: 20,
+    maxPerDay: 3,                                     // 每个游戏日最多几班
+  },
+};
+
+/* ---------- NPC：林小满（女，汉堡店店主的女儿） ----------
+ * 人设只放这里；对话、故事、事件文案在 js/npc-data.js，交互在 js/npc.js。
+ * spot：白天营业时站在街上的格子（人行道，紧挨店门口的右侧）；夜里不在街上。
+ * limits：每天有效聊天次数、送礼次数、好感几天不见开始衰减、打工加成门槛。 */
+G.NPCS = {
+  lin: {
+    id: 'lin',
+    name: '林小满',
+    age: 22,
+    job: '林记汉堡店员（店主林国栋的女儿）',
+    family: '父亲林国栋开这家店十五年了，汉堡的做法是他一手教的。她小时候每天放学就躲在柜台底下写作业，抬头就能看见爸爸翻肉饼。',
+    background: '大学读的是视觉设计，画了三年插画，老师夸过她的线条。毕业后说“先回来帮几个月”，结果一待就是两年，画笔也渐渐收进了抽屉。',
+    personality: '嘴硬心软，说话直来直去，被夸了就转移话题。爱用“行吧”“哎呀”，偶尔冒一句冷笑话。对客人凶巴巴的，但会偷偷多给熟客加一片生菜。',
+    catchphrase: '行吧，那就这样。',
+    hobbies: ['在菜单背面画速写（画客人，从不给人看）', '翻老唱片，店里常放八十年代的爵士', '收集供应商送的贴纸'],
+    flaw: '答应别人的事总拖到最后一刻；心情不好时会把抹布摔得很响。',
+    secret: '偷偷报了外地的插画研修班，学费是这两年攒下的。录取通知压在抽屉最底下，还没敢告诉爸爸。',
+    favorite: 'cheese',                       // 最爱的口味：送这个额外 +3 好感
+    spot: { gx: 13, gy: 4 },
+    limits: {
+      chatPerDay: 2,                          // 每天有效聊天次数
+      giftPerDay: 1,                          // 每天送礼次数
+      decayAfterDays: 3,                      // 超过这么多天没去看她，之后每天 -1（不跨阶段）
+      shiftBonusAt: 60,                       // 好感达到此值，打工工资 +10%
+      shiftBonus: 0.1,
+    },
+  },
+};
+
 // 室内门：开在底墙（格外一行），x 取房间宽的一半；门口一格是室内可走格
 G.homeDoor = function (room) { return { gx: Math.floor(room.w / 2), gy: room.h }; };
 G.homeDoorFront = function (room) { var d = G.homeDoor(room); return { gx: d.gx, gy: d.gy - 1 }; };
@@ -114,6 +167,10 @@ G.homeDoorFront = function (room) { var d = G.homeDoor(room); return { gx: d.gx,
  *   buildMode: false,
  *   selected: null,        // 选中的家具 uid
  *   scene: 'home',         // 'home'|'street'：室内 / 门口外景（外景时家具与宠物不参与）
+ *   burger: { day, shifts }, // 汉堡店：当天（day）已打班数，换日自动重置
+ *   work: null | { t, total }, // 正在打工：t 已过秒数，total 总秒数；非空时玩家不能移动/使用
+ *   npcs: { lin: { affinity, lastSeenDay, lastTalkDay, talksToday, giftDay, giftToday, checkDay,
+ *                  flags: { story, events, sketch }, pending } },   // 林小满，字段见 npc.js
  * }
  * 坐标约定：格坐标 (gx,gy) 对应室内左上角为(0,0)。
  * 像素坐标 = 格坐标*G.TILE。render 画室内时整体加上 (G.view.ox, G.view.oy) 偏移（外圈墙厚度1格）。
@@ -208,5 +265,14 @@ G.newState = function () {
     pet: null, log: [], paused: false, buildMode: false, selected: null,
     flags: { blackout: 0 },
     scene: 'home',
+    burger: { day: 1, shifts: 0 },
+    work: null,
+    npcs: {
+      lin: {
+        affinity: 10, lastSeenDay: 1, lastTalkDay: 0, talksToday: 0,
+        giftDay: 0, giftToday: 0, checkDay: 1,
+        flags: { story: 0, events: {}, sketch: false }, pending: [],
+      },
+    },
   };
 };

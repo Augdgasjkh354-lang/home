@@ -479,10 +479,11 @@
     out.weather = WEATHER_LABEL[d.weather] ? d.weather : base.weather;
     out.roomLevel = G.clamp(Math.floor(pickNum(d.roomLevel, base.roomLevel)), 0, G.ROOMS.length - 1);
 
+    var defNeeds = base.needs;          // 先存下默认值：out 与 base 是同一对象，下面要重建 out.needs
     out.needs = {};
     G.NEEDS.forEach(function (k) {
       var v = isObj(d.needs) ? d.needs[k] : undefined;
-      out.needs[k] = G.clamp(pickNum(v, base.needs[k]), 0, 100);
+      out.needs[k] = G.clamp(pickNum(v, defNeeds[k]), 0, 100);
     });
 
     if (Array.isArray(d.furniture)) {
@@ -514,6 +515,19 @@
     out.scene = d.scene === 'street' ? 'street' : 'home';
     out.flags = Object.assign({ blackout: 0 }, isObj(d.flags) ? d.flags : {});
     out.flags.blackout = Math.max(0, pickNum(out.flags.blackout, 0));
+
+    // 汉堡店：当天已打班数（换日后由 burger.js 重置）
+    out.burger = isObj(d.burger)
+      ? { day: Math.max(1, Math.floor(pickNum(d.burger.day, out.day))), shifts: Math.max(0, Math.floor(pickNum(d.burger.shifts, 0))) }
+      : base.burger;
+
+    // 正在打工的进度（读档后继续）
+    out.work = isObj(d.work) && pickNum(d.work.total, 0) > 0
+      ? { t: Math.max(0, pickNum(d.work.t, 0)), total: pickNum(d.work.total, 12) }
+      : null;
+
+    // 林小满等 NPC 的状态（补齐缺失字段）
+    out.npcs = G.npc && G.npc.fill ? G.npc.fill(d.npcs, out.day) : base.npcs;
 
     return out;
   }

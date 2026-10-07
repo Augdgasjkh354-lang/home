@@ -43,6 +43,8 @@
         if (G.events) G.events.update(dt);
         if (G.player) G.player.update(dt);
         if (G.petAI) G.petAI.update(dt);
+        if (G.burger && G.burger.update) G.burger.update(dt);
+        if (G.npc && G.npc.update) G.npc.update(dt);
       }
       if (G.ui) G.ui.update(dt);
       if (G.render) G.render.draw(dt);

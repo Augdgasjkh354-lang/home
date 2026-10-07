@@ -47,9 +47,15 @@
     return gx >= 0 && gy >= 0 && gx < r.w && gy < r.h;
   }
 
-  // 外景障碍：自家/汉堡店建筑占格、装饰树
+  // 打工中（G.state.work）：不能走动、不能使用家具，也不能自动去睡觉
+  function busy() {
+    return !!(G.state && G.state.work);
+  }
+
+  // 外景障碍：自家/汉堡店建筑占格、装饰树、林小满站的格子（白天营业时）
   function streetSolid(gx, gy) {
     const S = G.STREET;
+    if (G.npc && G.npc.blocks && G.npc.blocks(gx, gy)) return true;
     const rects = [S.home, S.shop];
     for (let i = 0; i < rects.length; i++) {
       const r = rects[i];
@@ -336,7 +342,7 @@
   }
 
   function tryAutoBed() {
-    if (isStreet()) return false;     // 床在家里：外景时等回家再躺
+    if (isStreet() || busy()) return false;     // 床在家里：外景时等回家再躺
     const fs = (G.state.furniture || []).filter(function (f) {
       const d = furnDef(f);
       return d && d.kind === 'bed';
@@ -380,6 +386,7 @@
 
   function moveTo(gx, gy) {
     if (!G.state || !G.state.player) return false;
+    if (busy()) { G.log('打工中，等这一班结束再走'); return false; }
     gx = Math.floor(gx);
     gy = Math.floor(gy);
     const route = plan(gx, gy);
@@ -394,12 +401,14 @@
 
   function useFurniture(uid) {
     autoBedArmed = false;             // 玩家主动操作，关闭自动睡觉
+    if (busy()) { G.log('打工中，先忙完这一班'); return false; }
     return requestUse(uid, false);
   }
 
   // 走到 (gx,gy) 后执行 onArrive（用于点门：走到门口再进出）；走不到返回 false
   function walkTo(gx, gy, onArrive) {
     if (!G.state || !G.state.player) return false;
+    if (busy()) return false;
     gx = Math.floor(gx);
     gy = Math.floor(gy);
     const route = plan(gx, gy);

@@ -12,17 +12,20 @@
 
 ## 结构与加载顺序
 所有模块挂在全局 `window.G` 上，脚本顺序固定（见 `index.html`）：
-`config → render → player → pet → economy → street → ui → main`
+`config → render → player → pet → economy → street → npc-data → npc → burger → ui → main`
 
 | 文件 | 职责 |
 |---|---|
-| `js/config.js` | 常量与数据：房间等级、家具目录、宠物、时间、需求；`G.newState()`、`G.log`。文件顶部注释是各模块的接口契约 |
+| `js/config.js` | 常量与数据：房间等级、家具目录、宠物、时间、需求、外景地图（`G.STREET`）、汉堡店（`G.BURGER`：店名/营业时间/菜单/打工参数）、林小满人设（`G.NPCS.lin`）；`G.newState()`、`G.log`。文件顶部注释是各模块的接口契约 |
 | `js/render.js` | 所有绘制（像素图全部用代码画）、缩放居中、屏幕坐标转格坐标 |
 | `js/player.js` | 玩家移动（A* 寻路）、使用家具、需求衰减 |
 | `js/pet.js` | 宠物 AI（`G.petAI`） |
 | `js/economy.js` | 时间/季节/天气推进、买卖摆放、房租、随机事件（`G.events`）、存档（`G.saveload`） |
-| `js/street.js` | 门口外景（`G.street`）：室内外切换、门的点击（走到门口再进出）；外景地图数据在 `config.js` 的 `G.STREET` |
-| `js/ui.js` | HUD、商店、建造模式、输入处理 |
+| `js/street.js` | 门口外景（`G.street`）：室内外切换、门的点击（走到门口再进出）；点林小满/汉堡店门时分别交给 `npc.js`/`burger.js` |
+| `js/npc-data.js` | 林小满的文案数据（`G.NPC_DATA`）：好感称号与开场白、聊天话题池、故事段落、好感事件、送礼回应 |
+| `js/npc.js` | 林小满（`G.npc`）：好感（存于 `G.state.npcs.lin`）、聊天/送礼/故事/事件、每日好感衰减、街上站位 |
+| `js/burger.js` | 汉堡店（`G.burger`）：营业时间、买汉堡（经 `G.economy.applyUse`）、打工一班（`G.state.work` 忙碌状态）、班次上限 |
+| `js/ui.js` | HUD、商店、建造模式、输入处理；`ui.openPanel({title, build, tick})` 是其他模块打开面板的通用接口 |
 | `js/main.js` | 启动、事件绑定、主循环 |
 
 ## 约定
@@ -41,6 +44,6 @@
 
 ## 路线图
 1. 院子 + 种菜（按季节生长，可做饭/卖钱）← 下一步
-2. 门口出行：小镇场景（便利店、市场、公园、打工点）
+2. 门口出行：小镇场景（便利店、市场、公园；汉堡店已有）
 3. 天气/季节对户外真正生效
-4. 宠物散步、邻居 NPC
+4. 宠物散步、更多邻居 NPC（林小满已完成，汉堡店打工已完成）

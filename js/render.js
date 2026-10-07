@@ -733,8 +733,8 @@
       }
     }
 
-    // 使用中的小动画：头顶冒气泡（三点轮流闪）
-    if (p.action) {
+    // 使用中 / 打工中：头顶冒气泡（三点轮流闪）
+    if (p.action || (G.state && G.state.work)) {
       var bx = x + 9, by = y - 8;
       B(g, bx, by, 9, 6, '#ffffff');
       var k = Math.floor(t * 3) % 3 + 1;
@@ -761,7 +761,8 @@
     var belly = cat ? '#f3ead8' : '#f3e2c4';
     var earC = cat ? '#e7a0a8' : '#7a4e2c';
     var nose = cat ? '#f08a9a' : OUT;
-    var x = Math.round(pet.x), y = Math.round(pet.y);
+    // pet.x/pet.y 是格中心；精灵以左上角绘制，减去半格（与玩家一致）
+    var x = Math.round(pet.x) - TILE / 2, y = Math.round(pet.y) - TILE / 2;
     var flip = pet.dir === 'left';
     var lying = state === 'sleep';
     var lift = state === 'play' ? Math.round(Math.abs(Math.sin(t * 6)) * 3) : 0;
@@ -831,6 +832,49 @@
       drawZ(g, zx, zy, 'rgba(120,140,200,' + (1 - ph * 0.6).toFixed(2) + ')');
       drawZ(g, zx - 3, zy - 4, 'rgba(120,140,200,' + (0.6 - ph * 0.3).toFixed(2) + ')');
     }
+  }
+
+  // 林小满：棕红长发（右侧发夹）、绿色店服上衣、奶白围裙、深蓝长裙；站街上待机（轻微起伏、偶尔眨眼）
+  // x,y 为所在格的左上角（世界坐标）
+  function drawNpcSprite(g, x, y, t, bubble) {
+    var HAIR_N = '#8c4a3a', TOP_N = '#5aa88a', APRON_N = '#f3e9d2', SKIRT_N = '#4a4f7a';
+    var SHOE_N = '#3a2f2a', CLIP_N = '#f3d46b';
+    var br = Math.floor((Math.sin(t * 2) + 1) / 2 * 1.99);     // 0/1 呼吸起伏
+    var blink = (t % 3.4) < 0.12;
+    var oy = y + br;
+    g.save();
+    g.imageSmoothingEnabled = false;
+    g.fillStyle = 'rgba(0,0,0,0.22)';                           // 影子
+    g.fillRect(x + 4, y + 15, 8, 1);
+    R(g, x + 5, oy + 14, 2, 2, SHOE_N);                          // 鞋
+    R(g, x + 9, oy + 14, 2, 2, SHOE_N);
+    B(g, x + 4, oy + 10, 8, 5, SKIRT_N);                         // 长裙
+    B(g, x + 2, oy + 8, 2, 4, TOP_N);                            // 手臂
+    B(g, x + 12, oy + 8, 2, 4, TOP_N);
+    B(g, x + 4, oy + 7, 8, 4, TOP_N);                            // 店服上衣
+    R(g, x + 5, oy + 9, 6, 4, APRON_N);                          // 围裙
+    R(g, x + 5, oy + 9, 6, 1, dk(APRON_N));
+    B(g, x + 4, oy + 1, 8, 7, SKIN);                             // 脸
+    R(g, x + 3, oy, 10, 3, HAIR_N);                              // 刘海与头顶
+    R(g, x + 5, oy + 3, 6, 1, HAIR_N);
+    R(g, x + 3, oy + 3, 2, 7, HAIR_N);                           // 长发垂肩
+    R(g, x + 11, oy + 3, 2, 7, HAIR_N);
+    R(g, x + 10, oy + 1, 2, 1, CLIP_N);                          // 发夹
+    if (blink) {
+      R(g, x + 6, oy + 6, 1, 1, OUT);
+      R(g, x + 9, oy + 6, 1, 1, OUT);
+    } else {
+      R(g, x + 6, oy + 5, 1, 2, OUT);
+      R(g, x + 9, oy + 5, 1, 2, OUT);
+    }
+    R(g, x + 7, oy + 7, 2, 1, '#e08a7a');                        // 小嘴
+    if (bubble) {                                                // 有未读事件：头顶「!」
+      var bx = x + 9, by = y - 8;
+      B(g, bx, by, 5, 7, '#ffffff');
+      R(g, bx + 2, by + 1, 1, 3, '#e0664f');
+      R(g, bx + 2, by + 5, 1, 1, '#e0664f');
+    }
+    g.restore();
   }
 
   /* ============================================================
@@ -950,12 +994,17 @@
     if (pl && typeof pl.x === 'number') list.push({ y: pl.y + TILE, p: pl });
     var pet = street ? null : st.pet;
     if (pet && typeof pet.x === 'number') list.push({ y: pet.y + TILE, pet: pet });
+    if (street && G.npc && G.npc.visible && G.npc.visible()) {   // 林小满：白天营业时在街上
+      var ns = G.npc.spot();
+      list.push({ y: (ns.gy + 1) * TILE, npc: { x: ns.gx * TILE, y: ns.gy * TILE, bubble: G.npc.hasPending && G.npc.hasPending() } });
+    }
     list.sort(function (a, b) { return a.y - b.y; });
     for (var j = 0; j < list.length; j++) {
       var e = list[j];
       if (e.f) drawFurn(g, e.f, bo, tick);
       else if (e.p) drawPlayerSprite(g, e.p, tick);
       else if (e.pet) drawPetSprite(g, e.pet, tick);
+      else if (e.npc) drawNpcSprite(g, e.npc.x, e.npc.y, tick, e.npc.bubble);
     }
 
     // 6. 天气粒子
