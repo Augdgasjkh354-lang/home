@@ -92,6 +92,8 @@
     // 电脑工作：体能降低精力消耗；手艺提高收入
     if (isPC && fx.energy < 0) {
       fx = Object.assign({}, fx, { energy: Math.round(fx.energy * skillBonus('stamina')) });
+      // 手艺 Lv10：连续两单只扣一次精力（见 burger.js 的 G.perks）
+      if (G.perks && G.perks.pcEnergy) fx.energy = G.perks.pcEnergy(fx.energy);
     }
 
     G.NEEDS.forEach(function (k) {
@@ -105,8 +107,11 @@
         var income = Math.round(
           fx.money * (1 + G.state.roomLevel * 0.25) * (1 + economy.auraBonus() * 0.02) * skillBonus('craft')
         );
+        // 手艺暴击（Lv5 起 10%，Lv8 起 25%，收入翻倍）
+        var crit = G.perks && G.perks.rollCrit ? G.perks.rollCrit() : 1;
+        income = Math.round(income * crit);
         economy.earn(income);
-        G.log('工作完成，赚到 ' + income + ' 元');
+        G.log('工作完成，赚到 ' + income + ' 元' + (crit > 1 ? '（手艺暴击，收入翻倍！）' : ''));
       } else {
         economy.earn(fx.money);
         G.log('到账 ' + fx.money + ' 元');

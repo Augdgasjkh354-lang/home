@@ -89,19 +89,90 @@
     return { ok: true };
   };
 
+  /* ---------- 体能 / 手艺的高阶效果（G.perks；数值在 config.js 的 G.SKILLS 里） ---------- */
+  G.registerModule({
+    id: 'perks',
+    defaults: function () { return { adrenalDay: 0, nightDay: 0, pcAbs: -99, pcStreak: 0 }; },
+  });
+  var perks = (G.perks = G.perks || {});
+
+  function skLv(id) { return G.skills && G.skills.level ? G.skills.level(id) : 0; }
+  function skCfg(id) {
+    var list = G.SKILLS || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return {};
+  }
+  function perkState() {
+    var s = G.state;
+    if (!s) return null;
+    if (!s.perks || typeof s.perks !== 'object') s.perks = { adrenalDay: 0, nightDay: 0, pcAbs: -99, pcStreak: 0 };
+    return s.perks;
+  }
+
+  // 手艺暴击（Lv5 起 10%，Lv8 起 25%）：返回收入倍率，1 或 mult
+  perks.rollCrit = function () {
+    var c = skCfg('craft').crit;
+    var lv = skLv('craft');
+    if (!c || lv < c.lv) return 1;
+    var chance = lv >= c.upLv ? c.upChance : c.chance;
+    return Math.random() < chance ? c.mult : 1;
+  };
+
+  // 电脑接单的精力消耗（amt 为负数）：手艺 Lv10 起，连续两单只扣一次（第二单不扣），间隔超过 gap 小时重新计
+  perks.pcEnergy = function (amt) {
+    var c = skCfg('craft').pair;
+    var s = G.state, p = perkState();
+    if (!c || !s || !p || skLv('craft') < c.lv) return amt;
+    var now = (s.day - 1) * 24 + s.time;
+    if (now - p.pcAbs > c.gap) p.pcStreak = 0;
+    p.pcAbs = now;
+    p.pcStreak += 1;
+    return p.pcStreak % 2 === 0 ? 0 : amt;
+  };
+
+  // 肾上腺素（体能 Lv5 起）：每天第一次精力低于 below 时自动回复 gain
+  function adrenalineTick() {
+    var s = G.state, p = perkState(), c = skCfg('stamina').adrenal;
+    if (!s || !p || !c || !s.needs || !G.economy || !G.economy.applyUse) return;
+    if (skLv('stamina') < c.lv) return;
+    if (s.needs.energy >= c.below || p.adrenalDay === s.day) return;
+    p.adrenalDay = s.day;
+    G.economy.applyUse(null, { effect: { energy: c.gain } });
+    G.log('肾上腺素上涌，精力 +' + c.gain + '（今天的第一次）');
+  }
+
+  // 电脑菜单：通宵咖啡（体能 Lv10 起，每天一次）
+  G.pcMenu = G.pcMenu || [];
+  G.pcMenu.push({
+    id: 'allnight',
+    label: '通宵咖啡',
+    desc: '体能 Lv10 起：不睡觉硬撑，精力 +40，心情 -10。每天一次。',
+    when: function () { return skLv('stamina') >= (skCfg('stamina').allNight || {}).lv; },
+    onClick: function () {
+      var s = G.state, p = perkState(), c = skCfg('stamina').allNight;
+      if (!s || !p || !c || !G.economy || !G.economy.applyUse) return;
+      if (p.nightDay === s.day) { G.log('今天已经通宵过一次了，身体撑不住'); return; }
+      p.nightDay = s.day;
+      G.economy.applyUse(null, { effect: { energy: c.energy, mood: c.mood } });
+      G.log('灌下一杯浓咖啡，精力 +' + c.energy + '，心情 ' + c.mood);
+    },
+  });
+
   function finishShift() {
     var s = G.state;
     var sh = shiftCfg();
     s.work = null;
-    // 体能降低精力消耗；手艺提高工资（技能模块未加载时系数为 1）
+    // 体能降低精力消耗（Lv8 起不扣饱腹）；手艺提高工资，暴击翻倍（技能模块未加载时系数为 1）
     var cost = Object.assign({}, sh.cost || {});
     if (cost.energy && G.skills && G.skills.bonus) cost.energy = Math.round(cost.energy * G.skills.bonus('stamina'));
+    if (skLv('stamina') >= skCfg('stamina').noHungerLv) delete cost.hunger;
     G.economy.applyUse(null, { effect: cost });
     var mult = G.npc && G.npc.shiftMultiplier ? G.npc.shiftMultiplier() : 1;
     var craft = G.skills && G.skills.bonus ? G.skills.bonus('craft') : 1;
-    var pay = Math.round((sh.pay || 0) * mult * craft);
+    var crit = perks.rollCrit();
+    var pay = Math.round((sh.pay || 0) * mult * craft * crit);
     G.economy.earn(pay);
-    G.log('打工结束，到账 ' + pay + ' 元' + (mult > 1 ? '（林小满加成 +10%）' : ''));
+    G.log('打工结束，到账 ' + pay + ' 元' + (mult > 1 ? '（林小满加成 +10%）' : '') + (crit > 1 ? '（手艺暴击，收入翻倍！）' : ''));
     if (G.skills && G.skills.addXp && G.SKILL_XP) {
       G.skills.addXp('stamina', G.SKILL_XP.work);
       G.skills.addXp('craft', G.SKILL_XP.work);
@@ -109,6 +180,7 @@
   }
 
   burger.update = function (dt) {
+    adrenalineTick();
     var s = G.state;
     if (!s || !s.work) return;
     s.work.t += dt;
@@ -187,7 +259,8 @@
     var jobSec = sec();
     jobSec.appendChild(el('div', 'shop-name', '兼职 · 打工一班'));
     jobSec.appendChild(el('div', 'shop-sub', '约 ' + (sh.duration || 12) + ' 秒，工资 🪙' + sh.pay + '（林小满好感够高时 +10%）'));
-    jobSec.appendChild(el('div', 'shop-sub', '消耗：精力' + sh.cost.energy + ' 饱腹' + sh.cost.hunger + ' 心情' + sh.cost.mood));
+    var noHunger = skLv('stamina') >= skCfg('stamina').noHungerLv;
+    jobSec.appendChild(el('div', 'shop-sub', '消耗：精力' + sh.cost.energy + ' 饱腹' + (noHunger ? '0（体能 Lv8）' : sh.cost.hunger) + ' 心情' + sh.cost.mood));
     jobSec.appendChild(el('div', 'shop-sub', '需要：精力 ≥' + sh.minEnergy + '、饱腹 ≥' + sh.minHunger));
     refs.shiftLeft = el('div', 'shop-sub', '');
     jobSec.appendChild(refs.shiftLeft);

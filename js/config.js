@@ -184,7 +184,15 @@ G.SKILLS = [
     desc: '跑腿、扛盘子练出来的耐力。打工和电脑工作更不容易累。',
     effect: function (lv) { return 1 - 0.03 * lv; },
     text: function (lv) { return '精力消耗 -' + (lv * 3) + '%'; },
-    unlocks: [],
+    // 高阶常量（js/burger.js、js/economy.js 读取）：crit 暴击（Lv5 起 10%，Lv8 起 25%，收入 ×mult）；
+    // pair 电脑接单两单扣一次精力（Lv10，两单间隔不超过 gap 游戏小时）
+    crit: { lv: 5, chance: 0.10, upLv: 8, upChance: 0.25, mult: 2 },
+    pair: { lv: 10, gap: 2 },
+    unlocks: [
+      { lv: 5, text: '接单工作与打工收入有 10% 概率暴击，收入翻倍' },
+      { lv: 8, text: '暴击率提高到 25%' },
+      { lv: 10, text: '电脑接单：连续做两单只扣一次精力（两单间隔不超过 2 小时）' },
+    ],
   },
   {
     id: 'charm', name: '口才', icon: '💬', maxLv: 10, need: G.xpNeed,
@@ -201,8 +209,11 @@ G.SKILLS = [
     text: function (lv) { return '炒股手续费 -' + (lv * 4) + '%'; },
     unlocks: [
       { lv: 3, text: '炒股新闻延迟降低，更早看到预告（延迟约 1 小时，原为 3 小时）' },
-      { lv: 6, text: '炒股详情显示每只股票的「情绪指数」' },
-      { lv: 9, text: '炒股详情显示「明日倾向」（仅供参考，不保证）' },
+      { lv: 6, text: '炒股详情显示每只股票的「情绪指数」，以及模糊的「明日倾向」（只看均值路径）' },
+      { lv: 7, text: '「观星」：每周 1 次，选一只股票，精确得知它明天的涨跌（当天一直可见）' },
+      { lv: 8, text: '「观星」改为每周 3 次' },
+      { lv: 9, text: '「观星」改为每天 1 次；「明日倾向」由精确预知取代' },
+      { lv: 10, text: '行情列表直接显示全部 8 只股票的明日涨跌（▲/▼ 与精确百分比），不再消耗观星次数' },
     ],
   },
   {
@@ -222,7 +233,15 @@ G.SKILLS = [
     desc: '翻肉饼、修电脑、接单子，手上的活越做越利索。',
     effect: function (lv) { return 1 + 0.03 * lv; },
     text: function (lv) { return '打工/电脑收入 +' + (lv * 3) + '%'; },
-    unlocks: [],
+    // 高阶常量（js/burger.js 读取）：adrenal 肾上腺素（Lv5）；noHungerLv 打工不扣饱腹（Lv8）；allNight 通宵咖啡（Lv10，每天一次）
+    adrenal: { lv: 5, below: 20, gain: 30 },
+    noHungerLv: 8,
+    allNight: { lv: 10, energy: 40, mood: -10 },
+    unlocks: [
+      { lv: 5, text: '每天第一次精力低于 20 时，肾上腺素上涌，自动回复 30 精力' },
+      { lv: 8, text: '打工一班不再消耗饱腹' },
+      { lv: 10, text: '电脑菜单多一项「通宵咖啡」：每天一次，不睡觉回复 40 精力（心情 -10）' },
+    ],
   },
   {
     id: 'street', name: '街头智慧', icon: '🧭', maxLv: 10, need: G.xpNeed,

@@ -13,10 +13,17 @@
  *   G.stocks.buy(code, q) / G.stocks.sell(code, q) -> {ok, reason?}
  *   G.stocks.feeRate() -> number           当前手续费率（基础费率 × 投资系数）
  *   G.stocks.news() -> [{...}]             当前可见的新闻（按发布时间倒序）
+ *   G.stocks.forecast() -> {[code]: {day, p0, p1, pct}}   明日（day 为天序号，从 0 起）精确涨跌，见下
+ *   G.stocks.oracle(code) -> {ok, reason?}  观星（投资 Lv7 起，次数见 G.stocks.oracleLeft()）
+ *   G.stocks.oracleLeft() -> number        本周期（Lv7/8 每周，Lv9 每天）剩余观星次数
+ *   G.stocks.revealed(code) -> bool        今天是否已观星该股票
  *
  * 价格模型（对数价格偏离 x，每游戏小时）：
  *   x' = x + κ(0 - x) + 行业日内趋势 + 事件冲击流 + σ·ε - σ²/2
  *   价格 = 基准价 · e^x，且不低于 1 元。日内趋势每天求和为 0，不产生长期漂移。
+ * 精确预知：每个游戏日开始时预抽当日与次日的 ε（存 s.nz）与次日事件（s.evDay 记录已生成到哪天）。
+ *   价格路径完全由「当前状态 + 预抽 ε + 事件」决定，所以用同一公式向前模拟得到的明日涨跌，
+ *   与之后实际发生的涨跌完全一致（同一套浮点运算，误差为 0）。
  * 事件：城市事件有「预告」（先发新闻，生效前若干小时市场开始反应）、「突发」（发布与生效几乎同时）、
  *   「追踪」（生效后才发新闻）三种。新闻到达玩家有延迟：投资 Lv3 前 3 小时，Lv3 起 1 小时。
  * ============================================================ */
@@ -33,7 +40,11 @@
   var RECENT_N = 6;              // 最近 N 个事件模板不重复抽取
   var KEEP_H = 24 * 21;          // 新闻保留 21 天
   var INTRADAY_LV = 6;           // 情绪指数解锁等级
-  var TOMORROW_LV = 9;           // 明日倾向解锁等级
+  var TENDENCY_LV = 6;           // 明日倾向（模糊版，只看均值路径）解锁等级
+  var EXACT_LV = 9;              // 明日倾向由精确预知取代（观星每天 1 次）
+  var ORACLE_LV = 7;             // 观星解锁等级
+  var ORACLE_ALL_LV = 10;        // 行情列表直接显示全部股票的明日精确涨跌
+  var WEEK_DAYS = 7;             // 观星次数的刷新周期（天）
   var NEWS_LV = 3;               // 新闻延迟降低的等级
   var BACKFILL_H = 168;   // 开局前补算 7 天价格（无事件、无分红），让走势图开局即有内容
 
@@ -43,6 +54,7 @@
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function round2(v) { return Math.round(v * 100) / 100; }
   function round4(v) { return Math.round(v * 10000) / 10000; }
+  function round6(v) { return Math.round(v * 1000000) / 1000000; }
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
   function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
   function gauss() {
@@ -104,6 +116,11 @@
       realized: 0,        // 已实现盈亏
       divIncome: 0,       // 累计分红
       feesPaid: 0,        // 累计手续费
+      nz: {},             // 预抽噪声：{ [天序号]: { [code]: [24 个标准正态 ε] } }，只保留当天及次日
+      evDay: -1,          // 事件已生成到的天序号（-1 表示未知，旧档迁移时置为当天）
+      oc: {               // 观星次数：wk/wu 为周计数（Lv7/8），dy/du 为日计数（Lv9），rev 为今天已观星的股票 {code: 天序号}
+        wk: -1, wu: 0, dy: -1, du: 0, rev: {},
+      },
     };
   }
 
@@ -232,16 +249,50 @@
     }
   }
 
-  // 推进一个整小时：从 H 到 H+1；quiet 为补算模式（不生成事件、不派息）
+  /* ---------- 每日预抽：噪声与事件提前一天生成，使「明日涨跌」可以精确预知 ---------- */
+  function ensureNoise(s, d) {
+    var key = String(d);
+    if (s.nz[key] && typeof s.nz[key] === 'object') return;
+    var ent = {};
+    allCfg().forEach(function (c) {
+      var arr = [];
+      for (var i = 0; i < 24; i++) arr.push(round6(gauss()));
+      ent[c.code] = arr;
+    });
+    s.nz[key] = ent;
+  }
+
+  // 第 H 小时某只股票的 ε：已预抽则用预抽值（价格路径的唯一随机来源），否则现抽（仅开局前补算）
+  function epsOf(s, H, code) {
+    var d = Math.floor(H / 24), ent = s.nz[String(d)];
+    var arr = ent && ent[code];
+    var v = arr ? arr[H - d * 24] : undefined;
+    return typeof v === 'number' && isFinite(v) ? v : gauss();
+  }
+
+  // 保证第 k 天、第 k+1 天的噪声已预抽，且事件已生成到第 k+1 天；丢弃更早的噪声。
+  // 第 k+1 天的事件只影响第 k+1 天及以后的价格（flowOf 的各阶段都不早于公告/生效时刻），
+  // 所以提前生成不会改变第 k 天已经发生的走势。initH：开局当天的事件只保留公告不早于 initH 的。
+  function ensureDays(s, k, initH) {
+    ensureNoise(s, k);
+    ensureNoise(s, k + 1);
+    while (s.evDay < k + 1) {
+      s.evDay += 1;
+      var ds = s.evDay * 24;
+      genDay(s, ds, s.evDay === k && initH !== undefined ? initH : ds);
+    }
+    Object.keys(s.nz).forEach(function (key) { if (Number(key) < k) delete s.nz[key]; });
+  }
+
+  // 推进一个整小时：从 H 到 H+1；quiet 为补算模式（不派息）
   function stepHour(s, H, quiet) {
-    if (!quiet && H % 24 === 0) genDay(s, H, H);
     var hod = H % 24;
     allCfg().forEach(function (c) {
       var p = s.px[c.code] || (s.px[c.code] = { x: 0, p: c.base });
       var sg = sigmaOf(c);
       var mu = c.amp * Math.cos(2 * Math.PI * (hod - c.peak) / 24);   // 行业日内趋势，一天求和为 0
       var flow = flowOf(s.events, c.code, H);
-      var x = p.x + c.kappa * (0 - p.x) + mu + flow + sg * gauss() - 0.5 * sg * sg;
+      var x = p.x + c.kappa * (0 - p.x) + mu + flow + sg * epsOf(s, H, c.code) - 0.5 * sg * sg;
       p.x = clamp(x, xMin(c), 2.5);
       p.p = priceFromX(c, p.x);
     });
@@ -256,19 +307,23 @@
     var s = S();
     if (!s) return;
     var nowH = nowHours();
-    if (!(s.lastH >= 0)) {                       // 首次初始化：先补算开局前 7 天的走势，再生成当天事件
+    if (!(s.lastH >= 0)) {                       // 首次初始化：先补算开局前 7 天的走势，再预抽当天与次日
       var H0 = Math.floor(nowH);
       for (var hb = H0 - BACKFILL_H; hb < H0; hb++) stepHour(s, hb, true);
       s.lastH = H0;
       if (!s.hist.h.length) pushHist(s, H0);
-      genDay(s, Math.floor(H0 / 24) * 24, H0);
+      s.evDay = Math.floor(H0 / 24) - 1;
+      ensureDays(s, Math.floor(H0 / 24), H0);
       return;
     }
     if (s.lastH > nowH + 1) s.lastH = Math.floor(nowH);   // 时间回退（异常存档）
+    if (!(s.evDay >= 0)) s.evDay = Math.floor(s.lastH / 24);   // 旧档迁移：当天事件已由旧逻辑生成
+    ensureDays(s, Math.floor(s.lastH / 24));
     var guard = 0;
     while (s.lastH + 1 <= nowH && guard++ < 200000) {     // 跨多天也一次补算
       stepHour(s, s.lastH);
       s.lastH += 1;
+      if (s.lastH % 24 === 0) ensureDays(s, s.lastH / 24);
     }
   };
 
@@ -398,7 +453,99 @@
     return { label: label, pct: pct };
   }
 
+  /* ---------- 精确预知：明日涨跌 ---------- */
+  // 从当前整点起，用与 stepHour 完全相同的公式（同一批预抽 ε、同一批事件）向前模拟到次日结束
+  function forecastAll(s) {
+    var out = {};
+    if (!(s.lastH >= 0)) return out;
+    var k = Math.floor(s.lastH / 24), t = k + 1;
+    if (!s.nz[String(k)] || !s.nz[String(t)]) return out;
+    allCfg().forEach(function (c) {
+      var p = s.px[c.code];
+      if (!p) return;
+      var sg = sigmaOf(c), x = p.x, xA = null, H, end = 24 * (t + 1);
+      for (H = s.lastH; H < end; H++) {
+        if (H === 24 * t) xA = x;                              // 次日开盘（24 点）时的状态
+        var mu = c.amp * Math.cos(2 * Math.PI * ((H % 24) - c.peak) / 24);
+        var flow = flowOf(s.events, c.code, H);
+        x = clamp(x + c.kappa * (0 - x) + mu + flow + sg * epsOf(s, H, c.code) - 0.5 * sg * sg, xMin(c), 2.5);
+      }
+      var p0 = priceFromX(c, xA), p1 = priceFromX(c, x);
+      out[c.code] = { day: t, p0: p0, p1: p1, pct: p1 / p0 - 1 };
+    });
+    return out;
+  }
+
+  // 观星：Lv7/8 每周 1/3 次，Lv9 每天 1 次；Lv10 不需要次数（全部可见）
+  function curDay() { return Math.floor(nowHours() / 24); }
+  function oracleQuota(lv) {
+    if (lv >= EXACT_LV) return { per: 'day', n: 1 };
+    if (lv >= 8) return { per: 'week', n: 3 };
+    if (lv >= ORACLE_LV) return { per: 'week', n: 1 };
+    return null;
+  }
+  function oracleLeft(s, lv) {
+    var q = oracleQuota(lv), oc = s.oc;
+    if (!q) return 0;
+    var d = curDay();
+    if (q.per === 'day') return Math.max(0, q.n - (oc.dy === d ? oc.du : 0));
+    return Math.max(0, q.n - (oc.wk === Math.floor(d / WEEK_DAYS) ? oc.wu : 0));
+  }
+  // 下次刷新的显示天数（从 1 起）
+  function oracleRefresh(lv) {
+    var q = oracleQuota(lv), d = curDay();
+    if (q && q.per === 'day') return d + 2;
+    return (Math.floor(d / WEEK_DAYS) + 1) * WEEK_DAYS + 1;
+  }
+  function revealedToday(s, code) { return s.oc.rev[code] === curDay(); }
+
+  function oracle(code) {
+    var s = S(), cfg = cfgOf(code), lv = skillLevel('invest');
+    if (!s || !cfg) return { ok: false, reason: '没有这只股票' };
+    if (lv < ORACLE_LV) return { ok: false, reason: '投资 Lv' + ORACLE_LV + ' 才能观星' };
+    if (lv >= ORACLE_ALL_LV) return { ok: true };
+    if (revealedToday(s, code)) return { ok: true };
+    if (oracleLeft(s, lv) <= 0) return { ok: false, reason: '观星次数用完了，第 ' + oracleRefresh(lv) + ' 天刷新' };
+    var d = curDay(), oc = s.oc, q = oracleQuota(lv);
+    if (q.per === 'day') {
+      if (oc.dy !== d) { oc.dy = d; oc.du = 0; }
+      oc.du += 1;
+    } else {
+      var w = Math.floor(d / WEEK_DAYS);
+      if (oc.wk !== w) { oc.wk = w; oc.wu = 0; }
+      oc.wu += 1;
+    }
+    Object.keys(oc.rev).forEach(function (k) { if (oc.rev[k] !== d) delete oc.rev[k]; });
+    oc.rev[code] = d;
+    G.log('观星：「' + cfg.name + '」明天的涨跌看清楚了');
+    return { ok: true };
+  }
+
+  // 列表/详情里该显示的明日精确涨跌：Lv10 全部显示，否则只显示今天观星过的
+  function fcShown(s, fc, code) {
+    if (!fc[code]) return null;
+    return skillLevel('invest') >= ORACLE_ALL_LV || revealedToday(s, code) ? fc[code] : null;
+  }
+
+  function fcText(f) {
+    var arrow = f.pct > 0 ? '▲' : f.pct < 0 ? '▼' : '—';
+    return arrow + ' ' + fmtPct(f.pct);
+  }
+
   /* ---------- 对外接口（查询） ---------- */
+  stocks.forecast = function () {
+    var s = S();
+    return s ? forecastAll(s) : {};
+  };
+  stocks.oracle = oracle;
+  stocks.oracleLeft = function () {
+    var s = S();
+    return s ? oracleLeft(s, skillLevel('invest')) : 0;
+  };
+  stocks.revealed = function (code) {
+    var s = S();
+    return !!(s && revealedToday(s, code));
+  };
   stocks.priceOf = priceOf;
   stocks.holding = holding;
   stocks.portfolioValue = portfolioValue;
@@ -487,7 +634,7 @@
     if (!s) return '';
     var px = allCfg().map(function (c) { return priceOf(c.code); }).join(',');
     return [view, curCode, range, qtyMode, Math.floor(cash()), skillLevel('invest'), s.lastH,
-      px, JSON.stringify(s.hold), visibleNews(s, nowHours()).length].join('|');
+      px, JSON.stringify(s.hold), visibleNews(s, nowHours()).length, JSON.stringify(s.oc)].join('|');
   }
 
   function tick() {
@@ -508,7 +655,18 @@
     box.appendChild(el('div', null, '现金 ' + Math.floor(cash()) + ' 元 · 持仓 ' + Math.round(mv) + ' 元'));
     box.appendChild(el('div', null, '总资产 ' + Math.round(cash() + mv) + ' 元'));
     box.appendChild(el('div', 'stk-hint', '投资 Lv' + skillLevel('invest') + ' · 手续费 ' + (feeRate() * 100).toFixed(2) + '%（最低 1 元）'));
+    var lv = skillLevel('invest');
+    if (lv >= ORACLE_ALL_LV) {
+      box.appendChild(el('div', 'stk-hint', '观星：全部股票的明日涨跌已精确可见（见行情）'));
+    } else if (lv >= ORACLE_LV) {
+      var left = oracleLeft(s, lv);
+      box.appendChild(el('div', 'stk-hint', '观星剩余 ' + left + ' 次' + quotaWhen(lv) + ' · 下次刷新：第 ' + oracleRefresh(lv) + ' 天'));
+    }
     return box;
+  }
+
+  function quotaWhen(lv) {
+    return oracleQuota(lv) && oracleQuota(lv).per === 'day' ? '（每天 1 次）' : '（本周 ' + oracleQuota(lv).n + ' 次）';
   }
 
   function tabsRow() {
@@ -531,6 +689,7 @@
 
   function buildList(body, s) {
     body.appendChild(el('div', 'sec', '行情每游戏小时更新一次。点股票看走势、买卖；留意「新闻」，有些消息会提前放出。'));
+    var fc = forecastAll(s);
     allCfg().forEach(function (c) {
       var p = priceOf(c.code);
       var ch = changeOf(s, c.code, 24);
@@ -550,6 +709,11 @@
         ? '持 ' + hd.n + ' 股 · 盈亏 ' + pnlText(hd.n * p - hd.cost)
         : '未持仓';
       row.appendChild(el('div', 'stk-sub', info));
+      var f = fcShown(s, fc, c.code);
+      if (f) {
+        var fl = el('div', 'stk-sub ' + cls(f.pct), '明日精确预知 ' + fcText(f));
+        row.appendChild(fl);
+      }
       body.appendChild(row);
     });
   }
@@ -671,17 +835,22 @@
     }
     body.appendChild(sentBox);
 
-    var tmBox = el('div', 'sec');
-    if (lv >= TOMORROW_LV) {
-      var tm = tomorrowOf(s, cfg.code);
-      if (tm) {
-        tmBox.appendChild(el('div', null, '明日倾向：' + tm.label + '（约 ' + fmtPct(tm.pct) + '）'));
-        tmBox.appendChild(el('div', 'stk-hint', '只是提示，不保证。'));
+    // 明日倾向（模糊版）：Lv9 前保留，Lv9 起由精确预知取代
+    if (lv < EXACT_LV) {
+      var tmBox = el('div', 'sec');
+      if (lv >= TENDENCY_LV) {
+        var tm = tomorrowOf(s, cfg.code);
+        if (tm) {
+          tmBox.appendChild(el('div', null, '明日倾向（模糊）：' + tm.label + '（约 ' + fmtPct(tm.pct) + '）'));
+          tmBox.appendChild(el('div', 'stk-hint', '只看均值路径，不含随机波动，仅供参考。'));
+        }
+      } else {
+        tmBox.appendChild(el('div', 'stk-hint', '投资 Lv' + TENDENCY_LV + ' 解锁：明日倾向（模糊版）'));
       }
-    } else {
-      tmBox.appendChild(el('div', 'stk-hint', '投资 Lv' + TOMORROW_LV + ' 解锁：明日倾向（仅提示）'));
+      body.appendChild(tmBox);
     }
-    body.appendChild(tmBox);
+
+    body.appendChild(oracleBox(s, cfg));
 
     // 相关新闻
     var newsSec = el('div', 'sec');
@@ -758,6 +927,35 @@
     }));
     tradeSec.appendChild(sides);
     body.appendChild(tradeSec);
+  }
+
+  // 明日精确预知 / 观星按钮
+  function oracleBox(s, cfg) {
+    var lv = skillLevel('invest');
+    var box = el('div', 'sec');
+    box.appendChild(el('div', null, '明日涨跌（精确预知）'));
+    if (lv < ORACLE_LV) {
+      box.appendChild(el('div', 'stk-hint', '投资 Lv' + ORACLE_LV + ' 解锁：观星，精确得知一只股票明天的涨跌'));
+      return box;
+    }
+    var f = fcShown(s, forecastAll(s), cfg.code);
+    if (f) {
+      box.appendChild(el('div', 'stk-big ' + cls(f.pct), '第 ' + (f.day + 1) + ' 天 ' + fcText(f)));
+      box.appendChild(el('div', 'stk-hint', '精确预知：下面的数字就是明天实际收盘的涨跌（显示精确到 0.01%）。今天有效，明天刷新。'));
+    }
+    if (lv >= ORACLE_ALL_LV) return box;
+    if (!f) {
+      var left = oracleLeft(s, lv);
+      var b = btn(left > 0 ? '观星（剩 ' + left + ' 次）' : '观星次数已用完', 'bigbtn small', function () {
+        var r = oracle(cfg.code);
+        if (!r.ok) toast(r.reason);
+        rebuild();
+      });
+      b.disabled = left <= 0;
+      box.appendChild(b);
+      box.appendChild(el('div', 'stk-hint', quotaWhen(lv) + ' · 下次刷新：第 ' + oracleRefresh(lv) + ' 天'));
+    }
+    return box;
   }
 
   function newsItem(e) {
