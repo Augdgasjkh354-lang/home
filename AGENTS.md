@@ -12,7 +12,7 @@
 
 ## 结构与加载顺序
 所有模块挂在全局 `window.G` 上，脚本顺序固定（见 `index.html`）：
-`config → render → player → pet → economy → ui → main`
+`config → render → player → pet → economy → street → ui → main`
 
 | 文件 | 职责 |
 |---|---|
@@ -21,6 +21,7 @@
 | `js/player.js` | 玩家移动（A* 寻路）、使用家具、需求衰减 |
 | `js/pet.js` | 宠物 AI（`G.petAI`） |
 | `js/economy.js` | 时间/季节/天气推进、买卖摆放、房租、随机事件（`G.events`）、存档（`G.saveload`） |
+| `js/street.js` | 门口外景（`G.street`）：室内外切换、门的点击（走到门口再进出）；外景地图数据在 `config.js` 的 `G.STREET` |
 | `js/ui.js` | HUD、商店、建造模式、输入处理 |
 | `js/main.js` | 启动、事件绑定、主循环 |
 

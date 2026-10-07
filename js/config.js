@@ -2,7 +2,7 @@
  * 像素小家 Pixel Home —— 共享契约（所有模块必须遵守）
  * 全局命名空间：window.G
  * 每个模块文件只做一件事：往 G 上挂自己的对象，不得修改别人的文件。
- * 脚本加载顺序：config → render → player → pet → economy → ui → main
+ * 脚本加载顺序：config → render → player → pet → economy → street → ui → main
  * 画面：俯视角，Canvas 2D，纯代码绘制像素图（不使用任何外部图片）
  * ============================================================ */
 window.G = window.G || {};
@@ -71,6 +71,30 @@ G.NEEDS = ['energy','hunger','mood','hygiene'];
 G.NEED_LABEL = { energy:'精力', hunger:'饱腹', mood:'心情', hygiene:'清洁' };
 G.NEED_DECAY = { energy:0.25, hunger:0.30, mood:0.12, hygiene:0.18 }; // 每真实秒下降
 
+/* ---------- 门口外景（街道） ----------
+ * 格坐标同室内（左上角 (0,0)）。建筑、树占格不可走；人行道、马路、草地可走。
+ * 行划分：0 草地 | 1~3 建筑 | 4 人行道 | 5~7 马路 | 8 人行道 | 9 草地
+ * home：自家小屋（点它回室内）；door 在建筑底排，门口一格 (door.gx, door.gy+1) 可走。
+ * shop：汉堡店占位（预留空地，本步只画外观；点击只提示「还在装修」）；sign 为招牌左上格。
+ * spawn：从室内出门后玩家出现的格（自家门口）。
+ * trees：不可走的装饰树（单格）。
+ */
+G.STREET = {
+  w: 16, h: 10,
+  home: { x: 2,  y: 1, w: 4, h: 3, door: { gx: 3,  gy: 3 } },
+  shop: { x: 10, y: 1, w: 4, h: 3, door: { gx: 11, gy: 3 }, sign: { gx: 10, gy: 1 } },
+  spawn: { gx: 3, gy: 4 },
+  trees: [
+    { gx: 0,  gy: 0 }, { gx: 6,  gy: 0 }, { gx: 15, gy: 0 },
+    { gx: 0,  gy: 2 }, { gx: 8,  gy: 2 }, { gx: 15, gy: 2 },
+    { gx: 5,  gy: 9 }, { gx: 12, gy: 9 },
+  ],
+};
+
+// 室内门：开在底墙（格外一行），x 取房间宽的一半；门口一格是室内可走格
+G.homeDoor = function (room) { return { gx: Math.floor(room.w / 2), gy: room.h }; };
+G.homeDoorFront = function (room) { var d = G.homeDoor(room); return { gx: d.gx, gy: d.gy - 1 }; };
+
 /* ============================================================
  *  全局状态（唯一真相源）  —— main.js 初始化，所有模块读写
  * ============================================================
@@ -89,6 +113,7 @@ G.NEED_DECAY = { energy:0.25, hunger:0.30, mood:0.12, hygiene:0.18 }; // 每真�
  *   paused: false,
  *   buildMode: false,
  *   selected: null,        // 选中的家具 uid
+ *   scene: 'home',         // 'home'|'street'：室内 / 门口外景（外景时家具与宠物不参与）
  * }
  * 坐标约定：格坐标 (gx,gy) 对应室内左上角为(0,0)。
  * 像素坐标 = 格坐标*G.TILE。render 画室内时整体加上 (G.view.ox, G.view.oy) 偏移（外圈墙厚度1格）。
@@ -182,5 +207,6 @@ G.newState = function () {
     player: { x: 2 * G.TILE, y: 4 * G.TILE, dir: 'down', action: null, path: [], busy: 0 },
     pet: null, log: [], paused: false, buildMode: false, selected: null,
     flags: { blackout: 0 },
+    scene: 'home',
   };
 };

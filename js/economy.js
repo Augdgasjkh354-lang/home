@@ -130,6 +130,80 @@
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   }
 
+  // 门口通道：门前一格不能被不可走家具压住，且不能切断门口与其它区域的连通（家具可以盖住的格子除外）
+  function doorOccupancy(room, extra) {
+    var W = room.w, H = room.h, occ = [];
+    for (var i = 0; i < W * H; i++) occ.push(false);
+    var list = G.state.furniture || [];
+    for (var j = 0; j < list.length; j++) {
+      var d = G.FURNITURE[list[j].id];
+      if (!d || d.walkable) continue;
+      var fp = G.footprint(list[j]);
+      for (var y = list[j].y; y < list[j].y + fp.h; y++) {
+        for (var x = list[j].x; x < list[j].x + fp.w; x++) {
+          if (x >= 0 && y >= 0 && x < W && y < H) occ[y * W + x] = true;
+        }
+      }
+    }
+    if (extra) {
+      for (var ey = extra.y; ey < extra.y + extra.h; ey++) {
+        for (var ex = extra.x; ex < extra.x + extra.w; ex++) {
+          if (ex >= 0 && ey >= 0 && ex < W && ey < H) occ[ey * W + ex] = true;
+        }
+      }
+    }
+    return occ;
+  }
+
+  // 从门口一格出发的连通区域（返回 mask 数组与格数）
+  function doorReach(room, occ, front) {
+    var W = room.w, H = room.h, mask = [], count = 0, q = [];
+    for (var i = 0; i < W * H; i++) mask.push(false);
+    if (front.gx < 0 || front.gy < 0 || front.gx >= W || front.gy >= H) return { mask: mask, count: 0 };
+    if (occ[front.gy * W + front.gx]) return { mask: mask, count: 0 };
+    mask[front.gy * W + front.gx] = true;
+    q.push([front.gx, front.gy]);
+    count = 1;
+    while (q.length) {
+      var c = q.shift();
+      var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (var k = 0; k < dirs.length; k++) {
+        var nx = c[0] + dirs[k][0], ny = c[1] + dirs[k][1];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        var idx = ny * W + nx;
+        if (mask[idx] || occ[idx]) continue;
+        mask[idx] = true;
+        count++;
+        q.push([nx, ny]);
+      }
+    }
+    return { mask: mask, count: count };
+  }
+
+  economy.doorCheck = function (id, gx, gy, rot) {
+    var def = G.FURNITURE[id];
+    if (!def || def.walkable || !G.state || !G.homeDoorFront) return { ok: true };
+    var room = G.ROOMS[G.state.roomLevel] || G.ROOMS[0];
+    var front = G.homeDoorFront(room);
+    var fp = G.footprint({ id: id, rot: rot ? 1 : 0 });
+    var rect = { x: gx, y: gy, w: fp.w, h: fp.h };
+    var covers = front.gx >= rect.x && front.gx < rect.x + rect.w && front.gy >= rect.y && front.gy < rect.y + rect.h;
+    if (covers) return { ok: false, reason: '门口要留一格通道' };
+
+    var before = doorReach(room, doorOccupancy(room, null), front);
+    if (!before.count) return { ok: true };     // 门口本来就被堵住：不因此再拦截
+    var after = doorReach(room, doorOccupancy(room, rect), front);
+    for (var y = 0; y < room.h; y++) {
+      for (var x = 0; x < room.w; x++) {
+        var idx = y * room.w + x;
+        if (!before.mask[idx]) continue;
+        if (x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h) continue;
+        if (!after.mask[idx]) return { ok: false, reason: '这里会挡住门口的通道' };
+      }
+    }
+    return { ok: true };
+  };
+
   economy.place = function (id, gx, gy, rot) {
     var def = G.FURNITURE[id];
     if (!def) return { ok: false, reason: '没有这件家具' };
@@ -165,6 +239,10 @@
       }
       return { ok: false, reason: '和别的家具重叠了' };
     }
+
+    // 门口通道不能被堵住
+    var dc = economy.doorCheck(id, gx, gy, rot);
+    if (!dc.ok) return dc;
 
     // 不能把人压在家具下面
     var p = G.state.player;
@@ -433,6 +511,7 @@
     out.paused = false;
     out.buildMode = false;
     out.selected = null;
+    out.scene = d.scene === 'street' ? 'street' : 'home';
     out.flags = Object.assign({ blackout: 0 }, isObj(d.flags) ? d.flags : {});
     out.flags.blackout = Math.max(0, pickNum(out.flags.blackout, 0));
 

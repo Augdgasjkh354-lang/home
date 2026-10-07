@@ -33,9 +33,33 @@
     return G.ROOMS[G.state.roomLevel] || G.ROOMS[0];
   }
 
+  // 当前场景：室内 'home' 或门口外景 'street'（外景地图见 config.js 的 G.STREET）
+  function isStreet() {
+    return !!(G.state && G.state.scene === 'street' && G.STREET);
+  }
+
+  function dims() {
+    return isStreet() ? G.STREET : room();
+  }
+
   function inBounds(gx, gy) {
-    const r = room();
+    const r = dims();
     return gx >= 0 && gy >= 0 && gx < r.w && gy < r.h;
+  }
+
+  // 外景障碍：自家/汉堡店建筑占格、装饰树
+  function streetSolid(gx, gy) {
+    const S = G.STREET;
+    const rects = [S.home, S.shop];
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (gx >= r.x && gx < r.x + r.w && gy >= r.y && gy < r.y + r.h) return true;
+    }
+    const trees = S.trees || [];
+    for (let i = 0; i < trees.length; i++) {
+      if (trees[i].gx === gx && trees[i].gy === gy) return true;
+    }
+    return false;
   }
 
   function cellOf(p) {
@@ -53,6 +77,7 @@
   // 覆盖某格的所有家具（包括 walkable 的）
   function coveringAt(gx, gy) {
     const list = [];
+    if (isStreet()) return list;      // 外景没有家具
     const fs = (G.state && G.state.furniture) || [];
     for (let i = 0; i < fs.length; i++) {
       const f = fs[i];
@@ -65,6 +90,7 @@
 
   function isBlocked(gx, gy) {
     if (!G.state || !inBounds(gx, gy)) return true;
+    if (isStreet()) return streetSolid(gx, gy);
     const list = coveringAt(gx, gy);
     for (let i = 0; i < list.length; i++) {
       if (!isWalkableDef(furnDef(list[i]))) return true;
@@ -266,13 +292,14 @@
     }
   }
 
-  // 玩家走到了使用地点：开始使用
+  // 玩家走到了目的地：有 arrive 回调则执行（如出门/进门），否则开始使用家具
   function resolveIntent() {
     if (!intent) return;
     const it = intent;
     intent = null;
     const c = cellOf(G.state.player);
     if (c.gx !== it.gx || c.gy !== it.gy) return;
+    if (it.arrive) { it.arrive(); return; }
     const f = findFurn(it.uid);
     if (f) startAction(f);
   }
@@ -309,6 +336,7 @@
   }
 
   function tryAutoBed() {
+    if (isStreet()) return false;     // 床在家里：外景时等回家再躺
     const fs = (G.state.furniture || []).filter(function (f) {
       const d = furnDef(f);
       return d && d.kind === 'bed';
@@ -325,7 +353,10 @@
     if (!G.state || !G.state.player) return;
     const p = G.state.player;
     let spot = null;
-    const r = room();
+    const r = dims();
+    if (isStreet() && !isBlocked(G.STREET.spawn.gx, G.STREET.spawn.gy)) {
+      spot = { gx: G.STREET.spawn.gx, gy: G.STREET.spawn.gy };
+    }
     // 第一轮：没有任何家具的空格；第二轮：仅要求可走
     for (let pass = 0; pass < 2 && !spot; pass++) {
       for (let gy = 0; gy < r.h && !spot; gy++) {
@@ -364,6 +395,33 @@
   function useFurniture(uid) {
     autoBedArmed = false;             // 玩家主动操作，关闭自动睡觉
     return requestUse(uid, false);
+  }
+
+  // 走到 (gx,gy) 后执行 onArrive（用于点门：走到门口再进出）；走不到返回 false
+  function walkTo(gx, gy, onArrive) {
+    if (!G.state || !G.state.player) return false;
+    gx = Math.floor(gx);
+    gy = Math.floor(gy);
+    const route = plan(gx, gy);
+    if (!route) return false;
+    const p = G.state.player;
+    p.path = route;
+    p.action = null;
+    autoBedArmed = false;
+    intent = { uid: null, gx: gx, gy: gy, arrive: onArrive || null };
+    return true;
+  }
+
+  // 直接放到某格（切换场景时用），清空路径与动作
+  function placeAt(gx, gy, dir) {
+    if (!G.state || !G.state.player) return;
+    const p = G.state.player;
+    p.x = gx * T + T / 2;
+    p.y = gy * T + T / 2;
+    p.path = [];
+    p.action = null;
+    p.dir = dir || 'down';
+    intent = null;
   }
 
   function update(dt) {
@@ -442,6 +500,8 @@
     init: init,
     update: update,
     moveTo: moveTo,
+    walkTo: walkTo,
+    placeAt: placeAt,
     useFurniture: useFurniture,
     isBlocked: isBlocked,
     furnitureAt: furnitureAt,

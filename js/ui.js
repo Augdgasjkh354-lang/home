@@ -247,6 +247,9 @@
     });
 
     els.pauseBtn.textContent = s.paused ? '继续' : '暂停';
+    // 外景时商店/建造不可用（点击提示「回家再整理」）
+    var outside = !!(G.street && G.street.isStreet && G.street.isStreet());
+    els.shopBtn.style.opacity = outside ? '.5' : '';
   }
 
   function onResetClick() {
@@ -624,6 +627,10 @@
 
   ui.openShop = function (tab) {
     if (!els.panel) return;
+    if (G.street && G.street.isStreet && G.street.isStreet()) {
+      ui.toast('回家再整理');
+      return;
+    }
     if (typeof tab === 'string') shopTab = tab;
     shopOpen = true;
     els.panel.classList.remove('hidden');
@@ -658,6 +665,11 @@
       if (gx < o.x + of.w && o.x < gx + f.w && gy < o.y + of.h && o.y < gy + f.h) {
         return { ok: false, reason: '与「' + nameOf(o.id) + '」重叠' };
       }
+    }
+    // 门口通道（判断逻辑在 economy 里，放置时也会再校验一次）
+    if (G.economy && G.economy.doorCheck) {
+      var dc = G.economy.doorCheck(id, gx, gy, rot);
+      if (!dc.ok) return dc;
     }
     return { ok: true };
   }
@@ -712,6 +724,10 @@
 
   function startPlace(id) {
     if (!G.state || !G.FURNITURE[id]) return;
+    if (G.street && G.street.isStreet && G.street.isStreet()) {
+      ui.toast('回家再整理');
+      return;
+    }
     cancelBuild();
     beginBuild({ id: id, rot: 0, isNew: true, moveFrom: null });
     ui.toast('点击地面放置「' + nameOf(id) + '」，R 旋转，ESC 取消');
@@ -766,20 +782,26 @@
     var s = G.state;
     if (!s || !G.render || !G.render.screenToTile) return;
     var t = G.render.screenToTile(sx, sy);
-    if (!t) return;
 
     if (build) {
+      if (!t) return;
       lastGrid = { gx: t.gx, gy: t.gy };
       tryPlaceAt(t.gx, t.gy);
       return;
     }
 
-    if (s.pet && G.petAI && G.petAI.petAt && G.petAI.petAt(t.gx, t.gy)) {
+    // 门（室内的门开在墙上，格坐标在可用范围之外，所以用不做越界判断的换算）
+    var raw = G.render.screenToCell ? G.render.screenToCell(sx, sy) : null;
+    if (raw && G.street && G.street.handleClick && G.street.handleClick(raw.gx, raw.gy)) return;
+    if (!t) return;
+
+    var outside = !!(G.street && G.street.isStreet && G.street.isStreet());
+    if (!outside && s.pet && G.petAI && G.petAI.petAt && G.petAI.petAt(t.gx, t.gy)) {
       if (G.petAI.pat) G.petAI.pat();
       return;
     }
 
-    var f = G.player && G.player.furnitureAt ? G.player.furnitureAt(t.gx, t.gy) : null;
+    var f = !outside && G.player && G.player.furnitureAt ? G.player.furnitureAt(t.gx, t.gy) : null;
     if (f) {
       var d = G.FURNITURE[f.id];
       if (d && d.use) {

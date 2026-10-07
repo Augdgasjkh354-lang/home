@@ -5,6 +5,7 @@
  * 坐标约定（世界坐标，逻辑像素，1 格 = G.TILE）：
  *   室内左上角格 (0,0) 的左上角 = 世界 (0,0)；
  *   上墙厚 2 格（窗户位于其中），左/右/下墙各 1 格。
+ *   外景（G.state.scene==="street"）：世界 (0,0) = G.STREET 地图左上角，无外圈墙，地图整体居中。
  * G.view = { ox, oy, w, h, scale }
  *   ox,oy = 室内 (0,0) 点在画布 CSS 像素中的位置；w,h = 室内宽高（CSS 像素）；scale = 整数缩放。
  *   即：屏幕 x = ox + gx * TILE * scale。
@@ -351,6 +352,7 @@
     R(g, -TILE, 0, TILE, H, WALL_SIDE);
     R(g, W, 0, TILE, H, WALL_SIDE);
     R(g, -TILE, H, W + 2 * TILE, TILE, WALL_SIDE);
+    drawHomeDoor(g, G.homeDoor(room).gx * TILE, H);                    // 底墙上的门
     // 外轮廓
     R(g, -TILE, -2 * TILE, W + 2 * TILE, 1, OUT);
     R(g, -TILE, -2 * TILE, 1, H + 3 * TILE, OUT);
@@ -364,6 +366,155 @@
     if (staticCv && staticKey === key) return;
     staticCv = buildStatic(room);
     staticKey = key;
+  }
+
+  /* ============================================================
+   * 门口外景（街道）：地图静态层按季节/雪天缓存；夜灯每帧叠加。
+   * 地图数据见 config.js 的 G.STREET，本段只负责画。
+   * ============================================================ */
+  var ROAD = '#5d5a68', ROAD_DASH = '#f3ead8', CURB = '#e9dcc0';
+  var PAVE = '#d8ccb4', PAVE_SEAM = '#bfb296';
+  var H_WALL = '#f2e6cf', H_PLANK = '#e2d0ab', H_ROOF = '#c4574a';
+  var S_RED = '#d9483b', S_WHITE = '#fff5e1', S_YEL = '#ffd23f';
+  var GLASS = '#9fd8ef', GLASS_WARM = '#ffe9a8';
+  var LEAF = '#3d8a4f', LEAF_LT = '#5fae68', TRUNK = '#7a4e2c';
+  var streetCv = null, streetKey = '';
+
+  function isStreet() { return !!(G.state && G.state.scene === 'street' && G.STREET); }
+  function sceneDims() { return isStreet() ? G.STREET : roomDef(); }
+  function sceneKey() {
+    var d = sceneDims();
+    return isStreet() ? 'street:' + d.w + 'x' + d.h : roomKey(d);
+  }
+  function seasonOf(st) { return (((st.season | 0) % 4) + 4) % 4; }
+
+  // 窗框（WOOD 框 + 十字窗格）
+  function winBox(g, x, y, w, h, glass) {
+    B(g, x - 1, y - 1, w + 2, h + 2, WOOD);
+    R(g, x, y, w, h, glass);
+    R(g, x + Math.floor(w / 2) - 1, y, 2, h, WOOD);
+    R(g, x, y + Math.floor(h / 2) - 1, w, 2, WOOD);
+    R(g, x + 1, y + 1, 2, 2, '#ffffff');
+  }
+
+  // 室内底墙上的门（格外一行，嵌在墙里）
+  function drawHomeDoor(g, x, y) {
+    B(g, x + 2, y + 1, 12, 15, WOOD);
+    R(g, x + 4, y + 3, 8, 5, dk(WOOD));
+    R(g, x + 4, y + 9, 8, 5, dk(WOOD));
+    R(g, x + 10, y + 8, 2, 2, '#f3d46b');
+  }
+
+  function drawTree(g, gx, gy) {
+    var x = gx * TILE, y = gy * TILE;
+    R(g, x + 3, y + 13, 10, 2, 'rgba(0,0,0,0.18)');     // 树影
+    R(g, x + 7, y + 9, 2, 5, TRUNK);
+    B(g, x + 2, y + 1, 12, 10, LEAF);
+    R(g, x + 4, y + 3, 3, 2, LEAF_LT);
+    R(g, x + 9, y + 6, 2, 1, LEAF_LT);
+  }
+
+  // 自家小屋：红瓦屋顶、木墙带窗，门在底排（朝向门前人行道）。以建筑左上角为局部原点
+  function drawHouse(g, r) {
+    var fw = r.w * TILE, fh = r.h * TILE, dx = (r.door.gx - r.x) * TILE;
+    g.save();
+    g.translate(r.x * TILE, r.y * TILE);
+    B(g, 0, 0, fw, 16, H_ROOF);                          // 屋顶
+    for (var i = 0; i < fw; i += 8) R(g, i + 4, 0, 1, 8, dk(H_ROOF));
+    R(g, 0, 14, fw, 2, dk(H_ROOF));                      // 屋檐
+    B(g, 0, 16, fw, fh - 16, H_WALL);                    // 墙
+    for (var x = 3; x < fw - 2; x += 6) R(g, x, 18, 1, fh - 20, H_PLANK);
+    winBox(g, 4, 21, 10, 10, GLASS);
+    winBox(g, fw - 14, 21, 10, 10, GLASS);
+    B(g, dx + 2, fh - 14, 12, 14, WOOD);                 // 门
+    R(g, dx + 4, fh - 12, 8, 4, dk(WOOD));
+    R(g, dx + 4, fh - 7, 8, 4, dk(WOOD));
+    R(g, dx + 10, fh - 6, 2, 2, '#f3d46b');
+    g.restore();
+  }
+
+  // 汉堡店：顶部黄色招牌（汉堡图样）、红白条纹雨棚、红墙、玻璃门
+  function drawShop(g, r) {
+    var fw = r.w * TILE, fh = r.h * TILE, dx = (r.door.gx - r.x) * TILE;
+    var bx = (r.sign.gx - r.x) * TILE + 6, by = (r.sign.gy - r.y) * TILE + 1;
+    var bw = fw - bx - 6, bh = 14;
+    g.save();
+    g.translate(r.x * TILE, r.y * TILE);
+    B(g, bx, by, bw, bh, WOOD);                          // 招牌板
+    R(g, bx + 2, by + 2, bw - 4, bh - 4, S_YEL);
+    var ix = bx + Math.floor(bw / 2) - 10, iy = by + 3;   // 汉堡：上包 / 生菜 / 肉饼 / 下包
+    R(g, ix + 1, iy, 18, 2, '#d98a3a');
+    R(g, ix + 4, iy, 1, 1, S_WHITE);
+    R(g, ix + 10, iy, 1, 1, S_WHITE);
+    R(g, ix, iy + 2, 20, 1, '#5aa05a');
+    R(g, ix, iy + 3, 20, 2, '#6b3e22');
+    R(g, ix, iy + 5, 20, 2, '#d98a3a');
+    for (var i = 0; i < fw; i += 8) R(g, i, 16, 8, 8, (i / 8) % 2 ? S_WHITE : S_RED);   // 雨棚
+    R(g, 0, 24, fw, 1, OUT);
+    R(g, 0, 25, fw, fh - 25, S_RED);                     // 墙
+    R(g, 0, 25, fw, 1, dk(S_RED));
+    winBox(g, 4, 30, 10, 9, GLASS_WARM);
+    winBox(g, fw - 14, 30, 10, 9, GLASS_WARM);
+    B(g, dx + 2, fh - 14, 12, 14, S_WHITE);              // 门（玻璃门）
+    R(g, dx + 4, fh - 12, 8, 6, GLASS);
+    R(g, dx + 4, fh - 5, 8, 3, S_RED);
+    R(g, 0, fh - 1, fw, 1, OUT);
+    R(g, 0, 16, 1, fh - 16, OUT);
+    R(g, fw - 1, 16, 1, fh - 16, OUT);
+    g.restore();
+  }
+
+  function buildStreetStatic(season, snow) {
+    var S = G.STREET, W = S.w * TILE, H = S.h * TILE;
+    var cv = mk(W, H);
+    var g = cv.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    var grass = snow ? '#ffffff' : SEASON_GROUND[season];   // 与室内窗外草地同一套四季配色
+    R(g, 0, 0, W, H, grass);
+    for (var ty = 0; ty < S.h; ty++) {                       // 草地杂点
+      for (var tx = 0; tx < S.w; tx++) {
+        var hv = hash(ty * 31 + tx * 7);
+        if (hv % 3 === 0) R(g, tx * TILE + (hv % 11) + 2, ty * TILE + (Math.floor(hv / 11) % 11) + 2, 2, 1, dk(grass));
+      }
+    }
+    [4, 8].forEach(function (row) {                          // 人行道
+      R(g, 0, row * TILE, W, TILE, PAVE);
+      for (var x = 0; x < W; x += 16) R(g, x, row * TILE, 1, TILE, PAVE_SEAM);
+      R(g, 0, row * TILE + 7, W, 1, PAVE_SEAM);
+    });
+    R(g, 0, 5 * TILE, W, 3 * TILE, ROAD);                    // 马路
+    R(g, 0, 5 * TILE, W, 2, CURB);
+    R(g, 0, 8 * TILE - 2, W, 2, CURB);
+    for (var dx = 2; dx < W; dx += 16) R(g, dx, 6 * TILE + 7, 9, 2, ROAD_DASH);
+    drawHouse(g, S.home);
+    drawShop(g, S.shop);
+    for (var k = 0; k < S.trees.length; k++) drawTree(g, S.trees[k].gx, S.trees[k].gy);
+    return cv;
+  }
+
+  function ensureStreetStatic(season, snow) {
+    var key = season + '|' + (snow ? 1 : 0) + '|' + G.STREET.w + 'x' + G.STREET.h;
+    if (streetCv && streetKey === key) return;
+    streetCv = buildStreetStatic(season, snow);
+    streetKey = key;
+  }
+
+  // 外景夜灯：两栋楼的窗户与汉堡店招牌发暖光
+  function drawStreetLights(g, n) {
+    var S = G.STREET, T = TILE;
+    var sbx = (S.shop.sign.gx - S.shop.x) * T + 6;
+    var sbw = S.shop.w * T - sbx - 6;
+    var pts = [
+      [S.home.x * T + 9, S.home.y * T + 26],
+      [S.home.x * T + S.home.w * T - 9, S.home.y * T + 26],
+      [S.shop.x * T + 9, S.shop.y * T + 34],
+      [S.shop.x * T + S.shop.w * T - 9, S.shop.y * T + 34],
+      [S.shop.x * T + sbx + sbw / 2, S.shop.y * T + (S.shop.sign.gy - S.shop.y) * T + 8]
+    ];
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < pts.length; i++) glow(g, pts[i][0], pts[i][1], 26, '255,200,120', 0.45 * n);
+    g.restore();
   }
 
   /* ---------- 窗户（随季节、天气、昼夜变化） ---------- */
@@ -536,7 +687,8 @@
   }
 
   function drawPlayerSprite(g, p, t) {
-    var x = Math.round(p.x), y = Math.round(p.y);
+    // p.x/p.y 是格中心；精灵以左上角绘制，需减去半格，人物才站在格子里（原先偏右下半格）
+    var x = Math.round(p.x) - TILE / 2, y = Math.round(p.y) - TILE / 2;
     var dir = p.dir || 'down';
     var walk = isMoving(p, t);
     var f = walk ? Math.floor(t * 7) % 2 : 0;
@@ -699,13 +851,15 @@
 
   G.render.resize = function () {
     if (!canvas) return;
-    var room = roomDef();
+    var street = isStreet();
+    var dims = sceneDims();
     var cw = Math.max(1, window.innerWidth || canvas.clientWidth || 800);
     var ch = Math.max(1, window.innerHeight || canvas.clientHeight || 600);
     dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
 
-    // 整数缩放：能放下的最大倍数，不超过 G.SCALE（可被外部覆盖）
-    var outW = (room.w + 2) * TILE, outH = (room.h + 3) * TILE;
+    // 整数缩放：能放下的最大倍数，不超过 G.SCALE（可被外部覆盖）。室内带外圈墙，外景只有地图本身
+    var outW = street ? dims.w * TILE : (dims.w + 2) * TILE;
+    var outH = street ? dims.h * TILE : (dims.h + 3) * TILE;
     var fit = Math.floor(Math.min((cw - 24) / outW, (ch - 24) / outH));
     var cap = Math.max(1, Math.floor(G.SCALE || 3));
     scale = Math.max(1, Math.min(fit, cap));
@@ -718,17 +872,24 @@
     ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
 
-    // 让「外圈墙 + 室内」整体居中
-    var ox = Math.round(cw / 2 - (room.w * TILE / 2) * scale);
-    var oy = Math.round(ch / 2 - ((room.h - 1) * TILE / 2) * scale);
+    var ox, oy;
+    if (street) {
+      // 外景地图整体居中
+      ox = Math.round(cw / 2 - (outW / 2) * scale);
+      oy = Math.round(ch / 2 - (outH / 2) * scale);
+    } else {
+      // 让「外圈墙 + 室内」整体居中
+      ox = Math.round(cw / 2 - (dims.w * TILE / 2) * scale);
+      oy = Math.round(ch / 2 - ((dims.h - 1) * TILE / 2) * scale);
+    }
     G.view = {
       ox: ox,
       oy: oy,
-      w: room.w * TILE * scale,
-      h: room.h * TILE * scale,
+      w: dims.w * TILE * scale,
+      h: dims.h * TILE * scale,
       scale: scale
     };
-    viewKey = roomKey(room);
+    viewKey = sceneKey();
   };
 
   G.render.draw = function (dt) {
@@ -736,8 +897,9 @@
     dt = clampDt(dt);
     tick += dt;
 
+    var street = isStreet();
     var room = roomDef();
-    if (roomKey(room) !== viewKey || !G.view) G.render.resize();
+    if (sceneKey() !== viewKey || !G.view) G.render.resize();
 
     var g = ctx;
     g.setTransform(1, 0, 0, 1, 0, 0);
@@ -748,19 +910,25 @@
     var st = G.state;
     if (!st || !G.view) return;
 
-    ensureStatic(room);
+    var dims = street ? G.STREET : room;
+    if (!street) ensureStatic(room);
     var v = G.view;
     g.setTransform(K, 0, 0, K, Math.round(v.ox * dpr), Math.round(v.oy * dpr));
 
-    var W = room.w * TILE, H = room.h * TILE;
+    var W = dims.w * TILE, H = dims.h * TILE;
     var n = nightness(Number(st.time) || 0);
-    var bo = !!(st.flags && st.flags.blackout > 0);
-    var furn = Array.isArray(st.furniture) ? st.furniture : [];
+    var bo = !street && !!(st.flags && st.flags.blackout > 0);
+    var furn = !street && Array.isArray(st.furniture) ? st.furniture : [];
 
-    // 1. 墙 + 地板
-    g.drawImage(staticCv, -TILE, -2 * TILE);
-    // 2. 窗户
-    drawWindow(g, room, st, n);
+    // 1. 墙 + 地板（外景：草地/人行道/马路/建筑/树）
+    if (street) {
+      ensureStreetStatic(seasonOf(st), st.weather === 'snow');
+      g.drawImage(streetCv, 0, 0);
+    } else {
+      g.drawImage(staticCv, -TILE, -2 * TILE);
+      // 2. 窗户
+      drawWindow(g, room, st, n);
+    }
 
     // 3. 地毯（可走，最底层）
     var list = [];
@@ -775,12 +943,12 @@
       list.push({ y: (f.y + fpOf(f).h) * TILE, f: f });
     }
     // 4. 建造网格
-    if (st.buildMode) drawGrid(g, room);
+    if (st.buildMode && !street) drawGrid(g, room);
 
-    // 5. 家具 + 玩家 + 宠物 按底边 y 排序
+    // 5. 家具 + 玩家 + 宠物 按底边 y 排序（外景不显示宠物，宠物留在家里）
     var pl = st.player;
     if (pl && typeof pl.x === 'number') list.push({ y: pl.y + TILE, p: pl });
-    var pet = st.pet;
+    var pet = street ? null : st.pet;
     if (pet && typeof pet.x === 'number') list.push({ y: pet.y + TILE, pet: pet });
     list.sort(function (a, b) { return a.y - b.y; });
     for (var j = 0; j < list.length; j++) {
@@ -791,20 +959,24 @@
     }
 
     // 6. 天气粒子
-    stepParticles(g, room, st.weather, dt);
+    stepParticles(g, dims, st.weather, dt);
 
-    // 7. 昼夜暗色滤镜（停电时额外变暗）
+    // 7. 昼夜暗色滤镜（室内停电时额外变暗）
     var a = Math.min(0.85, 0.55 * n + (bo ? 0.3 : 0));
     if (a > 0.01) {
       g.fillStyle = 'rgba(12,18,52,' + a.toFixed(3) + ')';
-      g.fillRect(-TILE, -2 * TILE, W + 2 * TILE, H + 3 * TILE);
+      if (street) g.fillRect(0, 0, W, H);
+      else g.fillRect(-TILE, -2 * TILE, W + 2 * TILE, H + 3 * TILE);
     }
     // 8. 灯光（停电时无光）
-    if (!bo && n > 0.05) drawLights(g, furn, n);
+    if (!bo && n > 0.05) {
+      if (street) drawStreetLights(g, n);
+      else drawLights(g, furn, n);
+    }
 
-    // 9. 建造预览与选中框（不被夜色压暗）
+    // 9. 建造预览与选中框（不被夜色压暗；外景没有建造）
     var gh = G.render.ghost;
-    if (gh && G.FURNITURE && G.FURNITURE[gh.id]) drawGhost(g, gh);
+    if (!street && gh && G.FURNITURE && G.FURNITURE[gh.id]) drawGhost(g, gh);
     if (st.selected) {
       for (var s = 0; s < furn.length; s++) {
         var sf = furn[s];
@@ -824,11 +996,21 @@
   G.render.screenToTile = function (sx, sy) {
     var v = G.view;
     if (!v || !v.scale) return null;
-    var room = roomDef();
+    var d = sceneDims();
     var gx = Math.floor((sx - v.ox) / (TILE * v.scale));
     var gy = Math.floor((sy - v.oy) / (TILE * v.scale));
-    if (!(gx >= 0 && gy >= 0 && gx < room.w && gy < room.h)) return null;
+    if (!(gx >= 0 && gy >= 0 && gx < d.w && gy < d.h)) return null;
     return { gx: gx, gy: gy };
+  };
+
+  // 不做越界判断的格坐标（室内的门开在墙上，需要能点到格外一行）
+  G.render.screenToCell = function (sx, sy) {
+    var v = G.view;
+    if (!v || !v.scale) return null;
+    return {
+      gx: Math.floor((sx - v.ox) / (TILE * v.scale)),
+      gy: Math.floor((sy - v.oy) / (TILE * v.scale))
+    };
   };
 
   G.render.drawFurnitureIcon = function (g, id, x, y, size) {

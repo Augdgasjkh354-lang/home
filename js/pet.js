@@ -268,6 +268,7 @@
   function update(dt) {
     const s = G.state;
     if (!s || s.paused || !s.pet) return;
+    if (s.scene === 'street') return;   // 宠物留在家里：外景时不移动（坐标与障碍表都属于室内）
     const pet = ensure(s.pet);
     dt = clamp(dt || 0, 0, 0.25);
 
