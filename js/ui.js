@@ -66,6 +66,8 @@
 
 #sel-bar { position:fixed; left:50%; bottom:12px; transform:translateX(-50%); display:none; align-items:center; justify-content:center; flex-wrap:wrap; gap:6px; background:#2a2636f0; border:2px solid #f3ead8; box-shadow:0 0 0 2px #1c1a24; padding:6px 8px; font-size:12px; z-index:7; max-width:94vw; }
 #sel-bar .sel-name { font-size:13px; }
+#build-bar { position:fixed; left:50%; bottom:12px; transform:translateX(-50%); display:none; align-items:center; justify-content:center; gap:10px; background:#2a2636f0; border:2px solid #f3ead8; box-shadow:0 0 0 2px #1c1a24; padding:6px; z-index:7; }
+#build-bar button { min-width:96px; min-height:44px; font-size:15px; }
 
 @media (max-width:600px) {
   #hud { font-size:11px; }
@@ -311,6 +313,17 @@
     bar.appendChild(closeB);
     host.appendChild(bar);
     els.selBar = bar;
+  }
+
+  // 建造模式下的触摸按钮条：与键盘 R / ESC 调用同一套函数
+  function buildBuildBar() {
+    var host = byId('app') || document.body;
+    var bar = el('div');
+    bar.id = 'build-bar';
+    bar.appendChild(btn('旋转', '', rotateBuild));
+    bar.appendChild(btn('取消', '', onEsc));
+    host.appendChild(bar);
+    els.buildBar = bar;
   }
 
   function refreshSelBar() {
@@ -657,6 +670,7 @@
   function endBuild() {
     build = null;
     lastGrid = null;
+    if (els.buildBar) els.buildBar.style.display = 'none';
     if (G.state) {
       G.state.buildMode = false;
       G.state.placing = null;
@@ -673,6 +687,7 @@
       G.state.selected = null;
     }
     if (G.render) G.render.ghost = null;
+    if (els.buildBar) els.buildBar.style.display = 'flex';
     refreshSelBar();
   }
 
@@ -851,6 +866,7 @@
     els.panel = panel;
     buildHud();
     buildSelBar();
+    buildBuildBar();
 
     window.addEventListener('keydown', onKey);
     window.addEventListener('resize', layout);
